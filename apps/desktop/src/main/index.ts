@@ -62,7 +62,7 @@ function createWindow(): void {
     mainWindow.webContents.once("did-finish-load", () => {
       void (async () => {
         const target = ".app-shell, .paywall-shell, .auth-shell";
-        const deadline = Date.now() + 20_000;
+        const deadline = Date.now() + 45_000;
         try {
           while (Date.now() < deadline) {
             const ready = await mainWindow!.webContents.executeJavaScript(`Boolean(document.querySelector(${JSON.stringify(target)}))`);

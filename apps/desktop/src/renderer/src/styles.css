@@ -1,20 +1,34 @@
 :root {
   color-scheme: dark;
-  font-family: Inter, "Segoe UI", Arial, sans-serif;
-  color: #f4f5f7;
-  background: #0b0d10;
+  /* Font tokens. System stacks only, no remote imports. */
+  --font-sans: Inter, "Segoe UI", system-ui, Arial, sans-serif;
+  --font-serif: Georgia, "Times New Roman", serif;
+  font-family: var(--font-sans);
+  /* Dense type scale (Claude-like). Used by new and repointed rules. */
+  --fs-greeting: 28px;
+  --fs-h2: 18px;
+  --fs-body: 14px;
+  --fs-ui: 13px;
+  --fs-small: 12px;
+  --fs-eyebrow: 11px;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --bg: #0b0d10;
-  --panel: #111419;
-  --panel-2: #171b21;
-  --line: #282e37;
-  --muted: #8f98a6;
-  --text: #f4f5f7;
-  --lime: #8b5cf6;
-  --lime-dark: #6d28d9;
-  --accent-ink: #ffffff;
-  --accent-soft: #a78bfa;
+  /* Warm-neutral dark palette (spec 2.2), slightly cool. */
+  --bg: #1F1E1D;
+  --panel: #1A1917;
+  --panel-2: #27262A;
+  --line: #393733;
+  --muted: #9A938A;
+  --text: #ECEAE4;
+  color: var(--text);
+  background: var(--bg);
+  /* Purple accent. --accent is the canonical token, --lime aliases it so
+     existing components that reference var(--lime) become purple. */
+  --accent: #8B5CF6;
+  --lime: var(--accent);
+  --lime-dark: #6D28D9;
+  --accent-ink: #FFFFFF;
+  --accent-soft: #A78BFA;
   --accent-glow: rgba(139, 92, 246, .16);
   --blue: #72a7ff;
   --danger: #ff7979;
@@ -22,6 +36,8 @@
 }
 
 * { box-sizing: border-box; }
+/* Base UI size is 14px so the app reads dense, not zoomed in. */
+html { font-size: 14px; font-family: var(--font-sans); }
 html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
 button, input, textarea, select { font: inherit; }
 button { color: inherit; }
@@ -29,16 +45,19 @@ button { color: inherit; }
 .brand { display: inline-flex; align-items: center; gap: 12px; }
 .brand-mark { width: 39px; height: 39px; display: grid; place-items: center; filter: drop-shadow(0 0 22px var(--accent-glow)); }
 .brand-glyph { width: 100%; height: 100%; display: block; }
-.brand-name { font-size: 22px; font-weight: 760; letter-spacing: -.5px; }
+/* Wordmark calmed from 22px to 18px so it reads crisp, not oversized. */
+.brand-name { font-size: 18px; font-weight: 760; letter-spacing: -.4px; }
 .brand-compact .brand-mark { width: 31px; height: 31px; }
-.brand-compact .brand-name { font-size: 18px; }
-.eyebrow { margin: 0; color: var(--lime); font-size: 11px; font-weight: 760; letter-spacing: 1.9px; }
+.brand-compact .brand-name { font-size: 16px; }
+/* Auth and paywall keep a slightly larger wordmark for the marketing surfaces. */
+.auth-card .brand-name { font-size: 22px; }
+.eyebrow { margin: 0; color: var(--lime); font-size: var(--fs-eyebrow); font-weight: 760; letter-spacing: 1.9px; }
 .muted { color: var(--muted); line-height: 1.6; }
 .primary, .secondary { border-radius: 10px; padding: 12px 18px; border: 1px solid transparent; cursor: pointer; font-weight: 700; }
 .primary { background: var(--lime); color: var(--accent-ink); }
 .primary:hover { background: var(--accent-soft); }
-.secondary { background: #191e24; border-color: #343b45; color: #f2f3f5; }
-.secondary:hover { border-color: #59626f; }
+.secondary { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+.secondary:hover { border-color: var(--muted); }
 .full { width: 100%; }
 button:disabled { cursor: not-allowed; opacity: .5; }
 
@@ -48,13 +67,14 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .loading-line::after { content: ""; position: absolute; inset: 0; width: 45%; background: var(--lime); animation: loading 1.2s ease-in-out infinite; }
 @keyframes loading { from { transform: translateX(-120%); } to { transform: translateX(260%); } }
 
-.auth-shell { height: 100%; display: grid; place-items: center; position: relative; overflow: hidden; background: #0b0d10; }
+.auth-shell { height: 100%; display: grid; place-items: center; position: relative; overflow: hidden; background: var(--bg); }
 .ambient { position: absolute; border-radius: 50%; filter: blur(2px); opacity: .55; }
 .ambient-one { width: 580px; height: 580px; left: -260px; top: -250px; background: radial-gradient(circle, rgba(114,167,255,.16), transparent 68%); }
 .ambient-two { width: 620px; height: 620px; right: -280px; bottom: -280px; background: radial-gradient(circle, rgba(139,92,246,.16), transparent 68%); }
-.auth-card { position: relative; width: min(440px, calc(100vw - 40px)); padding: 38px; border: 1px solid var(--line); border-radius: 20px; background: rgba(17,20,25,.92); box-shadow: 0 30px 90px rgba(0,0,0,.44); }
+.auth-card { position: relative; width: min(440px, calc(100vw - 40px)); padding: 38px; border: 1px solid var(--line); border-radius: 20px; background: var(--panel-2); box-shadow: 0 30px 90px rgba(0,0,0,.44); }
 .auth-card .brand { margin-bottom: 34px; }
-.auth-card h1 { margin: 12px 0 8px; font-size: 34px; letter-spacing: -1px; }
+/* Auth marketing hero stays large but calmed. */
+.auth-card h1 { margin: 12px 0 8px; font-size: 32px; font-weight: 600; letter-spacing: -.8px; }
 .auth-card form { display: grid; gap: 16px; margin-top: 28px; }
 .auth-card label { color: #c8cdd5; font-size: 13px; font-weight: 650; }
 .auth-card input { width: 100%; margin-top: 8px; padding: 13px 14px; border: 1px solid #323944; border-radius: 9px; outline: none; color: var(--text); background: #0d1014; }
@@ -68,7 +88,8 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .paywall-header { max-width: 1050px; margin: auto; display: flex; justify-content: space-between; align-items: center; }
 .secure-pill { padding: 7px 11px; border: 1px solid #3a3450; border-radius: 99px; color: #b9b0d0; background: #16131f; font-size: 11px; font-weight: 700; }
 .pricing-intro { text-align: center; max-width: 690px; margin: 62px auto 34px; }
-.pricing-intro h1 { margin: 10px 0 12px; font-size: clamp(34px, 4vw, 52px); letter-spacing: -2px; }
+/* Paywall marketing hero. Calmed: caps at about 40px instead of 52px. */
+.pricing-intro h1 { margin: 10px 0 12px; font-size: clamp(32px, 4vw, 40px); font-weight: 600; letter-spacing: -1.2px; }
 .pricing-intro > p:not(.eyebrow) { color: var(--muted); line-height: 1.55; }
 .billing-toggle { display: inline-flex; gap: 3px; margin-top: 22px; padding: 4px; background: #171b20; border: 1px solid var(--line); border-radius: 11px; }
 .billing-toggle button { border: 0; border-radius: 8px; padding: 9px 16px; cursor: pointer; color: #9aa3b0; background: transparent; }
@@ -90,14 +111,16 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .error-banner { max-width: 900px; margin: 15px auto; padding: 10px 14px; border: 1px solid #6e3e43; border-radius: 9px; color: #ffc3c3; background: #281619; }
 
 .app-shell { height: 100%; display: grid; grid-template-columns: 250px 1fr; background: var(--bg); }
-.sidebar { display: flex; flex-direction: column; padding: 21px 16px 16px; border-right: 1px solid #22272f; background: #0e1115; }
+/* Sidebar is one luminance step darker than the page (spec 2.2). */
+.sidebar { display: flex; flex-direction: column; padding: 21px 16px 16px; border-right: 1px solid var(--line); background: var(--panel); }
 .sidebar > .brand { padding: 0 8px 22px; }
 .sidebar nav { display: grid; gap: 4px; }
-.sidebar nav button { width: 100%; display: flex; align-items: center; gap: 11px; padding: 11px 12px; border: 1px solid transparent; border-radius: 9px; cursor: pointer; text-align: left; color: #9ca5b2; background: transparent; }
-.sidebar nav button span { width: 20px; text-align: center; font-size: 12px; color: #737d89; }
-.sidebar nav button:hover { color: #e4e7eb; background: #15191e; }
-.sidebar nav .nav-active { color: #f2f4f6; border-color: #2a3038; background: #1a1f25; }
-.sidebar nav .nav-active span { color: var(--lime); }
+.sidebar nav button { width: 100%; display: flex; align-items: center; gap: 11px; padding: 11px 12px; border: 1px solid transparent; border-radius: 9px; cursor: pointer; text-align: left; color: var(--muted); background: transparent; font-size: var(--fs-ui); }
+.sidebar nav button span { width: 20px; text-align: center; font-size: var(--fs-small); color: var(--muted); }
+.sidebar nav button:hover { color: var(--text); background: var(--panel-2); }
+/* Active nav item carries the purple accent on its glyph. */
+.sidebar nav .nav-active { color: var(--text); border-color: var(--line); background: var(--panel-2); }
+.sidebar nav .nav-active span { color: var(--accent); }
 .sidebar-security { margin-top: auto; display: flex; gap: 10px; align-items: center; padding: 13px 10px; border-top: 1px solid #242a31; border-bottom: 1px solid #242a31; }
 .shield { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; color: var(--accent-ink); background: var(--lime); font-size: 10px; font-weight: 900; }
 .sidebar-security strong, .sidebar-security small { display: block; }
@@ -110,35 +133,41 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .account-button small { margin-top: 2px; color: var(--lime); font-size: 10px; }
 .signout { margin-left: auto; color: #6f7884; font-size: 10px; }
 
-.workspace { min-width: 0; display: flex; flex-direction: column; position: relative; background: radial-gradient(circle at 60% 42%, rgba(139,92,246,.05), transparent 28%), #0b0d10; }
-.workspace::before { content: ""; position: absolute; inset: 72px 0 35px; pointer-events: none; opacity: .23; background-image: radial-gradient(#3b4149 1px, transparent 1px); background-size: 30px 30px; mask-image: linear-gradient(to bottom, transparent, #000 25%, #000 75%, transparent); }
-.workspace-header { position: relative; z-index: 1; min-height: 66px; display: flex; align-items: center; justify-content: space-between; padding: 12px 25px; border-bottom: 1px solid #1e232a; }
+/* Softened radial glow so the surface reads calm, not lit. */
+.workspace { min-width: 0; display: flex; flex-direction: column; position: relative; background: radial-gradient(circle at 60% 42%, rgba(139,92,246,.03), transparent 30%), var(--bg); }
+/* Dotted grid kept but barely visible. */
+.workspace::before { content: ""; position: absolute; inset: 72px 0 35px; pointer-events: none; opacity: .05; background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 30px 30px; mask-image: linear-gradient(to bottom, transparent, #000 25%, #000 75%, transparent); }
+.workspace-header { position: relative; z-index: 1; min-height: 66px; display: flex; align-items: center; justify-content: space-between; padding: 12px 25px; border-bottom: 1px solid var(--line); }
 .workspace-header > .brand { opacity: .88; }
 .usage-box { width: 185px; }
 .usage-box > div:first-child { display: flex; justify-content: space-between; font-size: 10px; color: #79828f; }
 .usage-box strong { color: #c6ccd4; font-weight: 650; }
-.usage-track { height: 3px; margin-top: 7px; border-radius: 5px; overflow: hidden; background: #252b32; }
-.usage-track span { display: block; height: 100%; background: var(--lime); }
-.workspace-content { position: relative; z-index: 1; width: min(850px, calc(100% - 64px)); margin: auto; padding: 54px 0 25px; }
-.workspace-content > h1 { margin: 10px 0 9px; font-size: clamp(33px, 4vw, 49px); line-height: 1.08; letter-spacing: -2px; }
-.workspace-subtitle { margin: 0 0 25px; color: #848e9a; }
-.composer { overflow: hidden; border: 1px solid #3a424c; border-radius: 16px; background: rgba(25,29,35,.97); box-shadow: 0 18px 60px rgba(0,0,0,.28); transition: border .2s; }
-.composer:focus-within { border-color: #6d5aa0; }
-.composer-running { border-color: #6d28d9; }
-.composer textarea { width: 100%; min-height: 125px; resize: none; padding: 22px 22px 8px; border: 0; outline: 0; color: #f2f3f5; background: transparent; font-size: 16px; line-height: 1.5; }
-.composer textarea::placeholder { color: #777f89; }
-.composer-tools { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-top: 1px solid #292f37; }
-.composer-tools select { margin-left: auto; padding: 7px 10px; border: 0; outline: 0; color: #aab2bc; background: #20252c; border-radius: 8px; font-size: 11px; }
-.tool-button { width: 32px; height: 32px; border: 1px solid #363d46; border-radius: 8px; cursor: pointer; color: #aab2bc; background: transparent; }
+/* Usage meter track warm-neutral, fill in the purple accent. */
+.usage-track { height: 3px; margin-top: 7px; border-radius: 5px; overflow: hidden; background: var(--line); }
+.usage-track span { display: block; height: 100%; background: var(--accent); }
+.workspace-content { position: relative; z-index: 1; width: min(760px, calc(100% - 64px)); margin: auto; padding: 40px 0 22px; }
+/* Empty-state greeting is a modest one-line heading, not a hero.
+   Serif body voice, weight 500, normal letter spacing (spec 2.1). */
+.workspace-content > h1 { margin: 0 0 18px; font-family: var(--font-serif); font-size: var(--fs-greeting); font-weight: 500; line-height: 1.2; letter-spacing: normal; }
+.workspace-subtitle { margin: 0 0 18px; color: var(--muted); font-size: var(--fs-ui); }
+/* Composer is a bordered surface lifted by border, not shadow (calmer). */
+.composer { overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--panel-2); transition: border .2s, box-shadow .2s; }
+.composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+.composer-running { border-color: var(--accent); }
+.composer textarea { width: 100%; min-height: 92px; resize: none; padding: 18px 18px 6px; border: 0; outline: 0; color: var(--text); background: transparent; font-size: var(--fs-body); line-height: 1.5; }
+.composer textarea::placeholder { color: var(--muted); }
+.composer-tools { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-top: 1px solid var(--line); }
+.composer-tools select { margin-left: auto; padding: 7px 10px; border: 0; outline: 0; color: var(--muted); background: var(--panel); border-radius: 8px; font-size: var(--fs-small); }
+.tool-button { width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; color: var(--muted); background: transparent; }
 .run-button, .stop-button { min-width: 82px; padding: 8px 12px; border: 0; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 750; }
 .run-button { color: var(--accent-ink); background: var(--lime); }
 .stop-button { color: white; background: #a34049; }
-.suggestions { margin-top: 28px; }
-.suggestions > span { display: block; margin-bottom: 7px; color: #68717d; font-size: 11px; font-weight: 650; }
-.suggestions button { width: 100%; display: flex; align-items: center; gap: 12px; padding: 13px 8px; border: 0; border-bottom: 1px solid #242a31; cursor: pointer; text-align: left; color: #aeb5be; background: transparent; }
-.suggestions button:hover { color: #f0f2f4; background: rgba(255,255,255,.015); }
-.suggestion-icon { width: 29px; height: 29px; display: grid; place-items: center; border: 1px solid #343b44; border-radius: 8px; color: var(--lime); font-size: 10px; }
-.arrow { margin-left: auto; color: #565f6b; }
+.suggestions { margin-top: 18px; }
+.suggestions > span { display: block; margin-bottom: 7px; color: var(--muted); font-size: var(--fs-eyebrow); font-weight: 650; }
+.suggestions button { width: 100%; display: flex; align-items: center; gap: 12px; padding: 13px 8px; border: 0; border-bottom: 1px solid var(--line); cursor: pointer; text-align: left; color: var(--muted); background: transparent; font-size: var(--fs-ui); }
+.suggestions button:hover { color: var(--text); background: rgba(255,255,255,.015); }
+.suggestion-icon { width: 29px; height: 29px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; color: var(--accent); font-size: 10px; }
+.arrow { margin-left: auto; color: var(--muted); }
 .activity-panel { max-height: 310px; overflow-y: auto; margin-top: 26px; padding: 18px 20px; border: 1px solid #2a3038; border-radius: 14px; background: rgba(16,19,23,.93); }
 .activity-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .activity-title h2 { margin: 0; font-size: 13px; }
@@ -154,9 +183,9 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 
 /* Side panels (Workflows, Scheduled, History, Permissions) */
 .panel-overlay { position: absolute; inset: 0; z-index: 20; display: flex; justify-content: flex-end; background: rgba(6,8,11,.5); backdrop-filter: blur(2px); animation: overlay-in .16s ease; }
-.panel { width: min(460px, 100%); height: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: #0e1115; box-shadow: -24px 0 60px rgba(0,0,0,.4); animation: panel-in .2s ease; }
-.panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 22px 22px 16px; border-bottom: 1px solid #1e232a; }
-.panel-header h2 { margin: 0; font-size: 19px; letter-spacing: -.4px; }
+.panel { width: min(460px, 100%); height: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--panel); box-shadow: -24px 0 60px rgba(0,0,0,.4); animation: panel-in .2s ease; }
+.panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 22px 22px 16px; border-bottom: 1px solid var(--line); }
+.panel-header h2 { margin: 0; font-size: var(--fs-h2); letter-spacing: -.4px; }
 .panel-header p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .panel-close { padding: 7px 12px; border: 1px solid #343b45; border-radius: 8px; cursor: pointer; color: #c4cad2; background: #181d23; font-size: 12px; font-weight: 650; }
 .panel-close:hover { border-color: #59626f; }
@@ -211,7 +240,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 
 /* Modals (approval and account) */
 .modal-overlay { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px; background: rgba(6,8,11,.62); backdrop-filter: blur(3px); animation: overlay-in .16s ease; }
-.modal { width: min(440px, 100%); padding: 26px; border: 1px solid var(--line); border-radius: 18px; background: #12161b; box-shadow: 0 30px 90px rgba(0,0,0,.5); animation: modal-in .18s ease; }
+.modal { width: min(440px, 100%); padding: 26px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel-2); box-shadow: 0 30px 90px rgba(0,0,0,.5); animation: modal-in .18s ease; }
 .modal-badge { display: inline-block; margin-bottom: 14px; padding: 4px 10px; border: 1px solid #463a6e; border-radius: 99px; color: var(--accent-soft); background: #1a1530; font-size: 10px; font-weight: 750; letter-spacing: .5px; }
 .modal h2 { margin: 0 0 8px; font-size: 20px; letter-spacing: -.4px; }
 .modal-text { margin: 0 0 16px; color: var(--muted); font-size: 13px; line-height: 1.55; }
