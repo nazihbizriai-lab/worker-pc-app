@@ -21,6 +21,12 @@ export type RunRow = {
   status: string;
   messages: unknown[];
   pendingToolUseId: string | null;
+  /** Number of model planning steps consumed by this run, capped server side. */
+  stepCount: number;
+  /** Normalized signature of the previous assistant action, for loop detection. */
+  lastActionSignature: string | null;
+  /** Number of consecutive identical actions seen so far (1 means seen once). */
+  repeatCount: number;
 };
 
 const client = createClient({
@@ -65,6 +71,9 @@ export async function initializeDatabase(db: Client = client): Promise<void> {
       status TEXT NOT NULL,
       messages_json TEXT NOT NULL,
       pending_tool_use_id TEXT,
+      step_count INTEGER NOT NULL DEFAULT 0,
+      last_action_signature TEXT,
+      repeat_count INTEGER NOT NULL DEFAULT 0,
       created_at_ms INTEGER NOT NULL,
       updated_at_ms INTEGER NOT NULL
     )`,
@@ -75,6 +84,25 @@ export async function initializeDatabase(db: Client = client): Promise<void> {
       received_at_ms INTEGER NOT NULL
     )`
   ], "write");
+
+  // Migrate databases created before the run safety columns existed. SQLite
+  // has no ADD COLUMN IF NOT EXISTS, so each ALTER is attempted and a duplicate
+  // column error is treated as already migrated. workcrew.db is gitignored and
+  // rebuilt by this function, so this only matters for long lived local files.
+  await addColumnIfMissing(db, "runs", "step_count", "INTEGER NOT NULL DEFAULT 0");
+  await addColumnIfMissing(db, "runs", "last_action_signature", "TEXT");
+  await addColumnIfMissing(db, "runs", "repeat_count", "INTEGER NOT NULL DEFAULT 0");
+}
+
+async function addColumnIfMissing(db: Client, table: string, column: string, definition: string): Promise<void> {
+  try {
+    await db.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : "";
+    // A duplicate column name means the migration already ran. Anything else is
+    // a real failure and must surface.
+    if (!message.includes("duplicate column")) throw error;
+  }
 }
 
 function asNumber(value: unknown): number {
@@ -154,9 +182,24 @@ export async function recordStripeEvent(eventId: string, eventType: string): Pro
 
 export async function createRun(run: RunRow): Promise<void> {
   await client.execute({
-    sql: `INSERT INTO runs(id, user_id, model, status, messages_json, pending_tool_use_id, created_at_ms, updated_at_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    args: [run.id, run.userId, run.model, run.status, JSON.stringify(run.messages), run.pendingToolUseId, Date.now(), Date.now()]
+    sql: `INSERT INTO runs(
+        id, user_id, model, status, messages_json, pending_tool_use_id,
+        step_count, last_action_signature, repeat_count, created_at_ms, updated_at_ms
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      run.id,
+      run.userId,
+      run.model,
+      run.status,
+      JSON.stringify(run.messages),
+      run.pendingToolUseId,
+      run.stepCount,
+      run.lastActionSignature,
+      run.repeatCount,
+      Date.now(),
+      Date.now()
+    ]
   });
 }
 
@@ -173,15 +216,31 @@ export async function getRun(runId: string, userId: string): Promise<RunRow | nu
     model: String(row.model) as ModelTier,
     status: String(row.status),
     messages: JSON.parse(String(row.messages_json)) as unknown[],
-    pendingToolUseId: row.pending_tool_use_id ? String(row.pending_tool_use_id) : null
+    pendingToolUseId: row.pending_tool_use_id ? String(row.pending_tool_use_id) : null,
+    stepCount: asNumber(row.step_count),
+    lastActionSignature: row.last_action_signature ? String(row.last_action_signature) : null,
+    repeatCount: asNumber(row.repeat_count)
   };
 }
 
 export async function updateRun(run: RunRow): Promise<void> {
   await client.execute({
-    sql: `UPDATE runs SET model = ?, status = ?, messages_json = ?, pending_tool_use_id = ?, updated_at_ms = ?
+    sql: `UPDATE runs SET
+        model = ?, status = ?, messages_json = ?, pending_tool_use_id = ?,
+        step_count = ?, last_action_signature = ?, repeat_count = ?, updated_at_ms = ?
       WHERE id = ? AND user_id = ?`,
-    args: [run.model, run.status, JSON.stringify(run.messages), run.pendingToolUseId, Date.now(), run.id, run.userId]
+    args: [
+      run.model,
+      run.status,
+      JSON.stringify(run.messages),
+      run.pendingToolUseId,
+      run.stepCount,
+      run.lastActionSignature,
+      run.repeatCount,
+      Date.now(),
+      run.id,
+      run.userId
+    ]
   });
 }
 

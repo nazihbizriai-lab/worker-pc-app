@@ -12,11 +12,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from pywinauto import Application, Desktop
+# Note on imports: pywinauto is imported lazily inside the handler functions
+# that actually drive the desktop (see _load_pywinauto). This keeps the pure
+# validation and request handling logic importable without the package present,
+# so the unit tests can run under plain pytest with only the standard library.
+# Runtime behavior is unchanged when pywinauto is installed.
 
 
 MAX_BODY_BYTES = 64 * 1024
 MAX_TEXT_LENGTH = 10_000
+CONTROL_WAIT_TIMEOUT = 10
+CONTROL_PROBE_TIMEOUT = 1
 ALLOWED_COMMANDS = {
     "list-windows",
     "connect",
@@ -31,12 +37,21 @@ ALLOWED_COMMANDS = {
 
 class AgentState:
     def __init__(self) -> None:
-        self.application: Application | None = None
+        self.application: Any = None
         self.window: Any = None
         self.lock = threading.RLock()
 
 
 STATE = AgentState()
+
+
+def _load_pywinauto() -> Any:
+    # Imported lazily so the module can be imported for validation and tests
+    # without pywinauto installed. When the helper actually runs on Windows the
+    # package is present and this returns the live module objects.
+    from pywinauto import Application, Desktop
+
+    return Application, Desktop
 
 
 def require_text(value: Any, field: str, maximum: int = 500) -> str:
@@ -78,6 +93,7 @@ def validate_action(value: Any) -> dict[str, Any]:
 
 
 def list_windows() -> str:
+    _, Desktop = _load_pywinauto()
     windows: list[dict[str, Any]] = []
     for window in Desktop(backend="uia").windows():
         try:
@@ -91,11 +107,13 @@ def list_windows() -> str:
                 "rectangle": [rectangle.left, rectangle.top, rectangle.right, rectangle.bottom],
             })
         except Exception:
+            # A single inaccessible window must never abort the whole listing.
             continue
     return json.dumps(windows[:100], ensure_ascii=True)
 
 
 def connect_window(title: str) -> str:
+    Application, _ = _load_pywinauto()
     with STATE.lock:
         application = Application(backend="uia").connect(title=title, timeout=10)
         window = application.window(title=title)
@@ -112,12 +130,30 @@ def require_window() -> Any:
 
 
 def find_control(selector: str) -> Any:
+    # Try the most specific and stable selectors first, then fall back to
+    # progressively looser matches. Each candidate gets a short bounded probe so
+    # a missing control does not stall on the full wait timeout. The selector is
+    # plain text supplied by the caller, never code, so no candidate can do more
+    # than name a control to locate.
     window = require_window()
-    control = window.child_window(auto_id=selector)
-    if not control.exists(timeout=1):
-        control = window.child_window(title=selector)
-    control.wait("exists visible enabled ready", timeout=10)
-    return control
+    candidates = [
+        {"auto_id": selector},
+        {"title": selector},
+        {"control_type": selector},
+        {"best_match": selector},
+    ]
+    for criteria in candidates:
+        try:
+            control = window.child_window(**criteria)
+            if control.exists(timeout=CONTROL_PROBE_TIMEOUT):
+                control.wait("exists visible enabled ready", timeout=CONTROL_WAIT_TIMEOUT)
+                return control
+        except Exception:
+            # An unusable criterion (for example a value that is not a known
+            # control type) should fall through to the next candidate rather
+            # than surface as an internal error.
+            continue
+    raise ValueError("Control not found")
 
 
 def inspect_window() -> str:
@@ -132,6 +168,7 @@ def inspect_window() -> str:
                 "control_type": str(info.control_type or "")[:100],
             })
         except Exception:
+            # Skip any descendant that cannot be read instead of failing inspect.
             continue
     return json.dumps(controls, ensure_ascii=True)
 
@@ -163,6 +200,10 @@ def execute_action(action: dict[str, Any]) -> str:
             return f"Updated control {selector}"
         if command == "type-keys":
             value = optional_text(action.get("value"), MAX_TEXT_LENGTH) or ""
+            # pywinauto's type_keys interprets braces as special key sequences
+            # (for example {ENTER}, {VK_LWIN}, modifier chords). Rejecting any
+            # brace keeps model supplied text from triggering arbitrary key
+            # chords or hotkeys, so typing can only ever produce literal text.
             if re.search(r"[{}]", value):
                 raise ValueError("Special key sequences are not allowed")
             control.type_keys(value, with_spaces=True, set_foreground=True)
@@ -173,11 +214,20 @@ def execute_action(action: dict[str, Any]) -> str:
 
 
 def create_handler(expected_token: str) -> type[BaseHTTPRequestHandler]:
+    expected_authorization = f"Bearer {expected_token}"
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "WorkCrewWindowsAgent/0.1"
 
         def log_message(self, format_string: str, *args: Any) -> None:
+            # Logging is suppressed so request details (including any text
+            # payloads) never reach stdout or stderr.
             return
+
+        def authorized(self) -> bool:
+            supplied = self.headers.get("authorization", "")
+            # Constant-time compare avoids leaking the token through timing.
+            return hmac.compare_digest(supplied, expected_authorization)
 
         def send_json(self, status: int, payload: dict[str, Any]) -> None:
             body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
@@ -189,12 +239,20 @@ def create_handler(expected_token: str) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
+        def do_GET(self) -> None:
+            if self.path != "/health":
+                self.send_json(404, {"ok": False, "error": "Not found"})
+                return
+            if not self.authorized():
+                self.send_json(401, {"ok": False, "error": "Unauthorized"})
+                return
+            self.send_json(200, {"ok": True})
+
         def do_POST(self) -> None:
             if self.path != "/action":
                 self.send_json(404, {"ok": False, "error": "Not found"})
                 return
-            supplied = self.headers.get("authorization", "")
-            if not hmac.compare_digest(supplied, f"Bearer {expected_token}"):
+            if not self.authorized():
                 self.send_json(401, {"ok": False, "error": "Unauthorized"})
                 return
             try:
@@ -206,8 +264,13 @@ def create_handler(expected_token: str) -> type[BaseHTTPRequestHandler]:
                 output = execute_action(action)
                 self.send_json(200, {"ok": True, "output": output})
             except (ValueError, json.JSONDecodeError) as error:
+                # Validation errors are safe to return: they describe the
+                # request shape, not internal state.
                 self.send_json(400, {"ok": False, "error": str(error)})
             except Exception:
+                # Any other failure may carry internal detail (paths, library
+                # internals), so return a generic message and keep the specifics
+                # off the wire. Logging is suppressed, so nothing leaks anywhere.
                 self.send_json(500, {"ok": False, "error": "The Windows action failed"})
 
     return Handler

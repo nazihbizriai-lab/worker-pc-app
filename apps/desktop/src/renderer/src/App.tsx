@@ -8,10 +8,35 @@ import {
   type SubscriptionState
 } from "@workcrew/contracts";
 import { actionNeedsApproval, redactResult } from "./security";
+import {
+  type HistoryEntry,
+  type PermissionState,
+  type RunOutcome,
+  type Schedule,
+  type Workflow,
+  addHistory,
+  clearHistory,
+  loadHistory,
+  loadPermissions,
+  loadSchedules,
+  loadWorkflows
+} from "./lib/storage";
+import { ApprovalModal } from "./components/ApprovalModal";
+import { HistoryPanel } from "./components/HistoryPanel";
+import { WorkflowsPanel } from "./components/WorkflowsPanel";
+import { ScheduledPanel } from "./components/ScheduledPanel";
+import { PermissionsPanel } from "./components/PermissionsPanel";
+import { AccountDialog } from "./components/AccountDialog";
 
 type AppInfo = { name: string; version: string; devAuth: boolean; devBilling: boolean };
 type Phase = "loading" | "auth" | "paywall" | "workspace";
 type Activity = { id: number; title: string; detail?: string; tone?: "good" | "warn" | "bad" };
+type PanelView = "new" | "workflows" | "scheduled" | "history" | "permissions";
+type PendingApproval = {
+  action: AutomationAction;
+  label: string;
+  resolve: (approved: boolean) => void;
+};
 
 const EMPTY_ENTITLEMENT: SubscriptionState = {
   active: false,
@@ -197,23 +222,58 @@ function Workspace({ entitlement, onSignOut }: { entitlement: SubscriptionState;
   const [running, setRunning] = useState(false);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [usage, setUsage] = useState(entitlement.usedMicrodollars);
+  const [view, setView] = useState<PanelView>("new");
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [pending, setPending] = useState<PendingApproval | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
+  const [workflows, setWorkflows] = useState<Workflow[]>(() => loadWorkflows());
+  const [schedules, setSchedules] = useState<Schedule[]>(() => loadSchedules());
+  const [permissions, setPermissions] = useState<PermissionState>(() => loadPermissions());
   const stopRef = useRef(false);
   const activityId = useRef(0);
+  const activityCount = useRef(0);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const percent = Math.min(100, ((usage + entitlement.reservedMicrodollars) / entitlement.budgetMicrodollars) * 100 || 0);
 
   function addActivity(title: string, detail?: string, tone?: Activity["tone"]) {
     activityId.current += 1;
+    activityCount.current += 1;
     setActivities((current) => [...current, { id: activityId.current, title, detail, tone }]);
   }
 
-  async function runTask() {
-    if (task.trim().length < 3 || running) return;
+  // Open the approval modal and wait for the user to allow or decline.
+  function requestApproval(action: AutomationAction): Promise<boolean> {
+    return new Promise((resolve) => {
+      setPending({
+        action,
+        label: actionLabel(action),
+        resolve: (approved) => {
+          setPending(null);
+          resolve(approved);
+        }
+      });
+    });
+  }
+
+  function loadIntoComposer(nextTask: string) {
+    setTask(nextTask);
+    setView("new");
+    setAccountOpen(false);
+    requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
+  async function runTask(taskText: string = task) {
+    const trimmed = taskText.trim();
+    if (trimmed.length < 3 || running) return;
+    setView("new");
     setRunning(true);
     stopRef.current = false;
     setActivities([]);
-    addActivity("Task received", task.trim());
+    activityCount.current = 0;
+    addActivity("Task received", trimmed);
+    let outcome: RunOutcome = "failed";
     try {
-      const created = await window.workcrew.api.createRun(task.trim(), model);
+      const created = await window.workcrew.api.createRun(trimmed, model);
       let result: { toolUseId: string; ok: boolean; output: string } | undefined;
       for (let count = 0; count < 24 && !stopRef.current; count += 1) {
         addActivity("Planning next step");
@@ -221,13 +281,14 @@ function Workspace({ entitlement, onSignOut }: { entitlement: SubscriptionState;
         if (step.usage) setUsage(step.usage.usedMicrodollars);
         if (step.status === "complete" || step.action?.kind === "finish") {
           addActivity("Task complete", step.message ?? (step.action?.kind === "finish" ? step.action.summary : undefined), "good");
+          outcome = "complete";
           return;
         }
         if (!step.action || !step.toolUseId) throw new Error("The task service returned an incomplete step");
         addActivity(actionLabel(step.action));
         let approved = true;
         if (actionNeedsApproval(step.action)) {
-          approved = window.confirm(`WorkCrew requests permission for this action:\n\n${actionLabel(step.action)}\n\nAllow it once?`);
+          approved = await requestApproval(step.action);
         }
         if (!approved) {
           addActivity("Action declined", actionLabel(step.action), "warn");
@@ -244,12 +305,20 @@ function Workspace({ entitlement, onSignOut }: { entitlement: SubscriptionState;
           result = { toolUseId: step.toolUseId, ok: false, output: message };
         }
       }
-      if (stopRef.current) addActivity("Task stopped", "No further actions will run.", "warn");
-      else throw new Error("WorkCrew stopped the run after reaching the safety step limit");
+      if (stopRef.current) {
+        addActivity("Task stopped", "No further actions will run.", "warn");
+        outcome = "stopped";
+      } else {
+        throw new Error("WorkCrew stopped the run after reaching the safety step limit");
+      }
     } catch (error) {
       addActivity("Run stopped", errorMessage(error), "bad");
+      outcome = stopRef.current ? "stopped" : "failed";
     } finally {
       setRunning(false);
+      // Persist the run to local history. The activity count is tracked in a
+      // ref so the recorded number matches what the user saw in the timeline.
+      setHistory(addHistory({ task: trimmed, timestamp: Date.now(), outcome, activityCount: activityCount.current }));
     }
   }
 
@@ -265,19 +334,38 @@ function Workspace({ entitlement, onSignOut }: { entitlement: SubscriptionState;
     "Prepare a report from a downloaded file"
   ];
 
+  const navItems: { id: PanelView; glyph: string; label: string }[] = [
+    { id: "new", glyph: "+", label: "New task" },
+    { id: "workflows", glyph: "W", label: "Workflows" },
+    { id: "scheduled", glyph: "S", label: "Scheduled" },
+    { id: "history", glyph: "H", label: "History" },
+    { id: "permissions", glyph: "P", label: "Permissions" }
+  ];
+
+  const planLabel = entitlement.plan ? PLAN_CATALOG[entitlement.plan].name : "No plan";
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
         <Brand compact />
-        <nav>
-          <button className="nav-active"><span>+</span> New task</button>
-          <button><span>W</span> Workflows</button>
-          <button><span>S</span> Scheduled</button>
-          <button><span>H</span> History</button>
-          <button><span>P</span> Permissions</button>
+        <nav aria-label="Workspace sections">
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              className={view === item.id ? "nav-active" : ""}
+              aria-current={view === item.id ? "page" : undefined}
+              onClick={() => setView(item.id)}
+            >
+              <span>{item.glyph}</span> {item.label}
+            </button>
+          ))}
         </nav>
         <div className="sidebar-security"><span className="shield">S</span><div><strong>Protected locally</strong><small>Write actions ask first</small></div></div>
-        <button className="account-button" onClick={onSignOut}><span className="avatar">A</span><span><strong>Account</strong><small>{entitlement.plan === "ultra" ? "Ultra" : "Pro"}</small></span><span className="signout">Sign out</span></button>
+        <button className="account-button" onClick={() => setAccountOpen(true)} aria-label="Open account">
+          <span className="avatar">A</span>
+          <span><strong>Account</strong><small>{planLabel}</small></span>
+          <span className="signout">View</span>
+        </button>
       </aside>
       <section className="workspace">
         <header className="workspace-header">
@@ -292,16 +380,16 @@ function Workspace({ entitlement, onSignOut }: { entitlement: SubscriptionState;
           <h1>{running ? "WorkCrew is on it" : "What should WorkCrew handle?"}</h1>
           <p className="workspace-subtitle">Describe an outcome. WorkCrew will plan the steps and ask before making changes.</p>
           <div className={`composer ${running ? "composer-running" : ""}`}>
-            <textarea value={task} onChange={(event) => setTask(event.target.value)} placeholder="Ask WorkCrew to complete a task on your PC..." disabled={running} />
+            <textarea ref={composerRef} value={task} onChange={(event) => setTask(event.target.value)} placeholder="Ask WorkCrew to complete a task on your PC..." disabled={running} />
             <div className="composer-tools">
-              <button className="tool-button" title="Attachments are added in the next release">+</button>
+              <button className="tool-button" title="Attachments are added in the next release" aria-label="Add attachment">+</button>
               <select value={model} onChange={(event) => setModel(event.target.value as ModelTier)} disabled={running} aria-label="Model preference">
                 <option value="auto">Auto model</option>
                 <option value="haiku">Haiku</option>
                 <option value="sonnet">Sonnet</option>
                 <option value="opus">Opus</option>
               </select>
-              {running ? <button className="stop-button" onClick={stop}>Stop</button> : <button className="run-button" onClick={runTask} disabled={task.trim().length < 3}>Run task</button>}
+              {running ? <button className="stop-button" onClick={stop}>Stop</button> : <button className="run-button" onClick={() => runTask()} disabled={task.trim().length < 3}>Run task</button>}
             </div>
           </div>
           {activities.length > 0 ? (
@@ -318,6 +406,50 @@ function Workspace({ entitlement, onSignOut }: { entitlement: SubscriptionState;
         </div>
         <footer>WorkCrew can make mistakes. Review important actions before approving them.</footer>
       </section>
+
+      {view === "workflows" && (
+        <WorkflowsPanel
+          workflows={workflows}
+          currentTask={task}
+          onClose={() => setView("new")}
+          onChange={setWorkflows}
+          onRun={(workflowTask) => loadIntoComposer(workflowTask)}
+        />
+      )}
+      {view === "scheduled" && (
+        <ScheduledPanel
+          schedules={schedules}
+          currentTask={task}
+          onClose={() => setView("new")}
+          onChange={setSchedules}
+        />
+      )}
+      {view === "history" && (
+        <HistoryPanel
+          entries={history}
+          onClose={() => setView("new")}
+          onReuse={(historyTask) => loadIntoComposer(historyTask)}
+          onCleared={() => setHistory(clearHistory())}
+        />
+      )}
+      {view === "permissions" && (
+        <PermissionsPanel
+          permissions={permissions}
+          onClose={() => setView("new")}
+          onChange={setPermissions}
+        />
+      )}
+      {accountOpen && (
+        <AccountDialog
+          entitlement={entitlement}
+          usedMicrodollars={usage}
+          onClose={() => setAccountOpen(false)}
+          onSignOut={onSignOut}
+        />
+      )}
+      {pending && (
+        <ApprovalModal action={pending.action} label={pending.label} onDecide={pending.resolve} />
+      )}
     </main>
   );
 }

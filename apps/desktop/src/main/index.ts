@@ -60,8 +60,16 @@ function createWindow(): void {
   const capturePath = process.env.WORKCREW_CAPTURE;
   if (capturePath) {
     mainWindow.webContents.once("did-finish-load", () => {
-      setTimeout(async () => {
+      void (async () => {
+        const target = ".app-shell, .paywall-shell, .auth-shell";
+        const deadline = Date.now() + 20_000;
         try {
+          while (Date.now() < deadline) {
+            const ready = await mainWindow!.webContents.executeJavaScript(`Boolean(document.querySelector(${JSON.stringify(target)}))`);
+            if (ready) break;
+            await new Promise((done) => setTimeout(done, 400));
+          }
+          await new Promise((done) => setTimeout(done, 600));
           const image = await mainWindow!.webContents.capturePage();
           await import("node:fs/promises").then((fs) => fs.writeFile(capturePath, image.toPNG()));
           console.info(`[WorkCrew] capture written to ${capturePath}`);
@@ -70,7 +78,7 @@ function createWindow(): void {
         } finally {
           app.quit();
         }
-      }, 6_500);
+      })();
     });
   }
   mainWindow.webContents.on("did-fail-load", (_event, code, description) => {

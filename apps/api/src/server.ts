@@ -17,6 +17,7 @@ import rawBody from "fastify-raw-body";
 import { ZodError } from "zod";
 import { authenticate } from "./auth.js";
 import {
+  actionSignature,
   actualCostMicrodollars,
   callModel,
   chooseModel,
@@ -35,6 +36,23 @@ import {
   upsertSubscription,
   type SubscriptionRow
 } from "./db.js";
+
+/** Application version reported on /health for diagnostics. */
+const APP_VERSION = "0.1.0";
+
+/**
+ * Maximum number of model planning steps a single run may consume. The desktop
+ * client caps its own loop at 24, but a malicious or buggy client could bypass
+ * that, so the server enforces the same ceiling authoritatively.
+ */
+const MAX_RUN_STEPS = 24;
+
+/**
+ * Number of consecutive identical assistant actions (same tool plus same
+ * normalized input) that ends a run as a loop. The third identical action in a
+ * row trips this and stops further budget spend.
+ */
+const MAX_REPEATED_ACTIONS = 3;
 
 const app = Fastify({
   logger: { level: config.logLevel },
@@ -105,7 +123,12 @@ async function subscriptionState(userId: string): Promise<SubscriptionState> {
   };
 }
 
-app.get("/health", async () => ({ ok: true, service: "workcrew-api", version: "0.1.0" }));
+app.get("/health", async () => ({
+  ok: true,
+  service: "workcrew-api",
+  version: APP_VERSION,
+  mode: config.mockAi ? "mock" : "live"
+}));
 
 app.get("/v1/entitlement", async (request) => subscriptionState(await authenticate(request)));
 
@@ -160,7 +183,10 @@ app.post("/v1/runs", async (request) => {
     model: body.model,
     status: "ready",
     messages: [{ role: "user", content: body.task }],
-    pendingToolUseId: null
+    pendingToolUseId: null,
+    stepCount: 0,
+    lastActionSignature: null,
+    repeatCount: 0
   });
   return { runId: id, status: "ready" };
 });
@@ -172,6 +198,9 @@ app.post<{ Params: { runId: string } }>("/v1/runs/:runId/next", async (request):
   const run = await getRun(request.params.runId, userId);
   if (!run) throw Object.assign(new Error("Run not found"), { statusCode: 404, code: "RUN_NOT_FOUND" });
   if (run.status === "complete") return { runId: run.id, status: "complete", message: "This run is already complete." };
+  if (run.status === "failed") {
+    return { runId: run.id, status: "failed", message: "This run has already stopped and cannot continue." };
+  }
 
   if (run.pendingToolUseId) {
     if (!body.result || body.result.toolUseId !== run.pendingToolUseId) {
@@ -190,6 +219,19 @@ app.post<{ Params: { runId: string } }>("/v1/runs/:runId/next", async (request):
   } else if (body.result) {
     throw Object.assign(new Error("This run is not waiting for a tool result"), { statusCode: 409, code: "UNEXPECTED_TOOL_RESULT" });
   }
+
+  // Enforce the server side step ceiling before spending any budget. This is
+  // authoritative even when a client ignores its own limit.
+  if (run.stepCount >= MAX_RUN_STEPS) {
+    run.status = "failed";
+    await updateRun(run);
+    return {
+      runId: run.id,
+      status: "failed",
+      message: `This run stopped after reaching the safety limit of ${MAX_RUN_STEPS} steps.`
+    };
+  }
+  run.stepCount += 1;
 
   const originalTask = String((run.messages[0] as { content?: unknown } | undefined)?.content ?? "");
   const tier = chooseModel(run.model, originalTask);
@@ -211,17 +253,44 @@ app.post<{ Params: { runId: string } }>("/v1/runs/:runId/next", async (request):
     }
     await settleBudget(reservation.reservationId, actualCost, result.providerRequestId);
     run.messages.push({ role: "assistant", content: result.content });
+
+    // Loop protection. A finish action ends the run and is never a loop. For
+    // any other action, compare its normalized signature with the previous one
+    // and stop the run when the same action repeats too many times in a row
+    // instead of spending more budget on the next step.
+    const signature = actionSignature(result.action);
+    if (result.action.kind !== "finish") {
+      run.repeatCount = signature === run.lastActionSignature ? run.repeatCount + 1 : 1;
+      run.lastActionSignature = signature;
+    }
+    const usage = await getBudgetUsage(userId, reservation.window);
+    const usagePayload = {
+      usedMicrodollars: usage.used,
+      budgetMicrodollars: PLAN_CATALOG[subscription.plan].monthlyApiBudgetMicrodollars
+    };
+
+    if (result.action.kind !== "finish" && run.repeatCount >= MAX_REPEATED_ACTIONS) {
+      run.status = "failed";
+      run.pendingToolUseId = null;
+      await updateRun(run);
+      return {
+        runId: run.id,
+        status: "failed",
+        message: `This run stopped after repeating the same action ${MAX_REPEATED_ACTIONS} times in a row (loop detected).`,
+        usage: usagePayload
+      };
+    }
+
     run.pendingToolUseId = result.action.kind === "finish" ? null : result.toolUseId ?? null;
     run.status = result.action.kind === "finish" ? "complete" : "awaiting_tool";
     await updateRun(run);
-    const usage = await getBudgetUsage(userId, reservation.window);
     return {
       runId: run.id,
       status: result.action.kind === "finish" ? "complete" : "awaiting_tool",
       action: result.action,
       toolUseId: result.toolUseId,
       message: result.action.kind === "finish" ? result.action.summary : undefined,
-      usage: { usedMicrodollars: usage.used, budgetMicrodollars: PLAN_CATALOG[subscription.plan].monthlyApiBudgetMicrodollars }
+      usage: usagePayload
     };
   } catch (error) {
     await settleBudget(reservation.reservationId, reservationAmount, (error as { providerRequestId?: string }).providerRequestId);
