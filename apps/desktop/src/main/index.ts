@@ -353,6 +353,7 @@ function registerIpc(): void {
 
   ipcMain.handle("automation:browser", (_event, action) => browserCli.execute(action));
   ipcMain.handle("automation:windows", (_event, action) => windowsAgent.execute(action));
+  ipcMain.handle("automation:launch-browser", () => browserCli.launchBrowser());
   ipcMain.handle("automation:stop", async () => {
     await Promise.allSettled([browserCli.stop(), windowsAgent.stop()]);
     return { stopped: true };

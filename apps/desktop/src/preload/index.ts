@@ -89,6 +89,7 @@ const workcrew = {
       if (action.kind === "windows") return ipcRenderer.invoke("automation:windows", action);
       return Promise.resolve(action.summary);
     },
+    launchBrowser: (): Promise<{ launched: boolean; message: string }> => ipcRenderer.invoke("automation:launch-browser"),
     stop: () => ipcRenderer.invoke("automation:stop")
   },
   files: {

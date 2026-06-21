@@ -12,6 +12,7 @@ import { formatTokens } from "./lib/storage";
 import { DEFAULT_CHAT_MODEL, turnsFromMessages } from "./lib/chat";
 import { useChatStream } from "./hooks/useChatStream";
 import { ChatView } from "./components/ChatView";
+import { AutomationPanel } from "./components/AutomationPanel";
 import { PermissionsPanel } from "./components/PermissionsPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { AccountDialog } from "./components/AccountDialog";
@@ -19,7 +20,7 @@ import { loadPermissions, type PermissionState } from "./lib/storage";
 
 type AppInfo = { name: string; version: string; authMode: string; billingMode: string };
 type Phase = "loading" | "auth" | "paywall" | "workspace";
-type PanelView = "chat" | "permissions" | "settings";
+type PanelView = "chat" | "automation" | "permissions" | "settings";
 
 const EMPTY_ENTITLEMENT: SubscriptionState = {
   active: false,
@@ -282,6 +283,13 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
         </button>
         <nav aria-label="Workspace sections">
           <button
+            className={view === "automation" ? "nav-active" : ""}
+            aria-current={view === "automation" ? "page" : undefined}
+            onClick={() => setView("automation")}
+          >
+            <span>A</span> Automation
+          </button>
+          <button
             className={view === "permissions" ? "nav-active" : ""}
             aria-current={view === "permissions" ? "page" : undefined}
             onClick={() => setView("permissions")}
@@ -364,6 +372,7 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
           onChange={setPermissions}
         />
       )}
+      {view === "automation" && <AutomationPanel model={model} onClose={() => setView("chat")} />}
       {view === "settings" && <SettingsPanel info={info} onClose={() => setView("chat")} />}
       {accountOpen && (
         <AccountDialog

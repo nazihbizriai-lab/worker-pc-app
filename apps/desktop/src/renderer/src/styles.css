@@ -164,6 +164,23 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .attachment-chip button { border: 0; cursor: pointer; color: var(--muted); background: none; font-size: 12px; line-height: 1; padding: 0 2px; }
 .attachment-chip button:hover { color: var(--text); }
 .attach-error { align-self: center; color: #d98a93; font-size: 12px; }
+/* Automation panel: task box, step list, and outcome summary. */
+.automation-task { width: 100%; resize: vertical; min-height: 70px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--panel-2); font-size: var(--fs-ui); line-height: 1.5; }
+.automation-task:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+.automation-steps { margin-top: 16px; }
+.automation-step { display: flex; align-items: center; gap: 11px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.automation-step .step-dot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--muted); }
+.automation-step.step-running .step-dot { background: var(--accent); }
+.automation-step.step-ok .step-dot { background: #4caf7d; }
+.automation-step.step-error .step-dot { background: #d98a93; }
+.automation-step.step-declined .step-dot { background: #c9a227; }
+.automation-step .record-main { flex: 1; min-width: 0; }
+.automation-step .step-status { color: var(--muted); font-size: 11px; text-transform: capitalize; }
+.automation-summary { margin-top: 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.automation-summary.complete { border-color: rgba(76, 175, 125, .5); }
+.automation-summary.failed, .automation-summary.stopped { border-color: rgba(217, 138, 147, .5); }
+.automation-summary strong { display: block; margin-bottom: 4px; }
+.automation-summary p { margin: 0; color: var(--muted); font-size: var(--fs-ui); }
 /* Settings: read-only info rows (version, sign in mode, billing mode). */
 .settings-info { margin-top: 18px; }
 .settings-info .record-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }

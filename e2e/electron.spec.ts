@@ -113,6 +113,19 @@ test("upgrading to Ultra removes the upgrade prompts", async () => {
   await expect(page.locator(".upgrade-card")).toHaveCount(0);
 });
 
+test("automation runs a task to completion", async () => {
+  await page.getByRole("button", { name: "Automation" }).click();
+  const taskBox = page.getByLabel("What should WorkCrew do?");
+  await expect(taskBox).toBeVisible();
+  await taskBox.fill("open a web page and read it");
+  await page.getByRole("button", { name: "Run task" }).click();
+  // The mock planner drives the run to a terminal state; the summary appears.
+  await expect(page.locator(".automation-summary")).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator(".automation-steps")).toBeVisible();
+  await page.getByRole("button", { name: "Close panel" }).click();
+  await expect(page.locator(".app-shell")).toBeVisible();
+});
+
 test("settings shows the backend address and app version", async () => {
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByLabel("Backend address")).toBeVisible();

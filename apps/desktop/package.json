@@ -14,9 +14,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@playwright/cli": "latest",
     "@workcrew/contracts": "0.1.0",
     "dotenv": "latest",
+    "playwright-core": "^1.61.0",
     "react": "latest",
     "react-dom": "latest",
     "zod": "latest"
@@ -38,7 +38,7 @@
     "productName": "WorkCrew",
     "asar": true,
     "files": ["out/**/*", "resources/**/*", "package.json"],
-    "asarUnpack": ["node_modules/@playwright/**/*", "node_modules/playwright-core/**/*"],
+    "asarUnpack": ["node_modules/playwright-core/**/*"],
     "protocols": [{ "name": "WorkCrew", "schemes": ["workcrew"] }],
     "win": {
       "target": ["nsis"],
