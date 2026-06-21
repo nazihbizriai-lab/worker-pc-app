@@ -12,6 +12,10 @@ const envSchema = z.object({
   HOST: z.string().default("127.0.0.1"),
   WORKCREW_DATA_URL: z.string().default("file:workcrew.db"),
   WORKCREW_DATA_AUTH_TOKEN: z.string().optional(),
+  // Production database. When set, the API uses Postgres (Supabase) instead of
+  // the local SQLite file. Backend only; never shipped to the desktop.
+  DATABASE_URL: z.string().optional(),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   WORKCREW_DEV_AUTH: booleanText,
   WORKCREW_DEV_BILLING: booleanText,
   WORKCREW_MOCK_AI: booleanText,
@@ -122,6 +126,8 @@ export const config = {
   host: env.NODE_ENV === "production" ? (process.env.HOST ?? "0.0.0.0") : env.HOST,
   dataUrl: env.WORKCREW_DATA_URL,
   dataAuthToken: env.WORKCREW_DATA_AUTH_TOKEN,
+  databaseUrl: env.DATABASE_URL,
+  supabaseServiceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
   devAuth: env.WORKCREW_DEV_AUTH,
   devBilling: env.WORKCREW_DEV_BILLING,
   mockAi: env.WORKCREW_MOCK_AI,

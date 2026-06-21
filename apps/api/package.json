@@ -21,11 +21,13 @@
     "fastify": "latest",
     "fastify-raw-body": "latest",
     "jose": "latest",
+    "pg": "^8.13.1",
     "stripe": "latest",
     "zod": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",
+    "@types/pg": "^8.11.10",
     "tsx": "latest",
     "vitest": "latest"
   }

@@ -1,6 +1,5 @@
-import { createClient, type Client } from "@libsql/client";
 import type { BillingInterval, ModelTier, PlanId } from "@workcrew/contracts";
-import { config } from "./config.js";
+import { createDatabaseClient, type DatabaseClient } from "./database/driver.js";
 
 export type SubscriptionRow = {
   userId: string;
@@ -29,19 +28,17 @@ export type RunRow = {
   repeatCount: number;
 };
 
-const client = createClient({
-  url: config.dataUrl,
-  authToken: config.dataAuthToken
-});
+const client = createDatabaseClient();
 
 /**
  * Ask SQLite to wait when the database is momentarily locked instead of failing
  * immediately with SQLITE_BUSY. A single file database can have only one writer
  * at a time, so concurrent writers (for example separate test workers or two
  * in-flight requests) need to queue briefly rather than error out. This is a
- * no-op for remote libsql endpoints.
+ * no-op for Postgres and for remote libsql endpoints.
  */
-async function setBusyTimeout(db: Client): Promise<void> {
+async function setBusyTimeout(db: DatabaseClient): Promise<void> {
+  if (db.dialect !== "sqlite") return;
   try {
     await db.execute("PRAGMA busy_timeout = 5000");
   } catch {
@@ -49,8 +46,11 @@ async function setBusyTimeout(db: Client): Promise<void> {
   }
 }
 
-export async function initializeDatabase(db: Client = client): Promise<void> {
+export async function initializeDatabase(db: DatabaseClient = client): Promise<void> {
   await setBusyTimeout(db);
+  // Millisecond timestamps and microdollar amounts use BIGINT so they fit in
+  // Postgres (a 32-bit INTEGER overflows on epoch-ms values). SQLite treats
+  // BIGINT as its 64-bit INTEGER affinity, so the same DDL runs on both.
   await db.batch([
     `CREATE TABLE IF NOT EXISTS subscriptions (
       user_id TEXT PRIMARY KEY,
@@ -60,23 +60,23 @@ export async function initializeDatabase(db: Client = client): Promise<void> {
       interval TEXT NOT NULL CHECK (interval IN ('month', 'year')),
       status TEXT NOT NULL,
       active INTEGER NOT NULL DEFAULT 0,
-      budget_anchor_ms INTEGER NOT NULL,
-      current_period_end_ms INTEGER NOT NULL,
-      updated_at_ms INTEGER NOT NULL
+      budget_anchor_ms BIGINT NOT NULL,
+      current_period_end_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL
     )`,
     `CREATE TABLE IF NOT EXISTS usage_ledger (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       run_id TEXT NOT NULL,
-      period_start_ms INTEGER NOT NULL,
-      period_end_ms INTEGER NOT NULL,
+      period_start_ms BIGINT NOT NULL,
+      period_end_ms BIGINT NOT NULL,
       model TEXT NOT NULL,
-      reserved_microdollars INTEGER NOT NULL,
-      actual_microdollars INTEGER NOT NULL DEFAULT 0,
+      reserved_microdollars BIGINT NOT NULL,
+      actual_microdollars BIGINT NOT NULL DEFAULT 0,
       status TEXT NOT NULL CHECK (status IN ('reserved', 'settled', 'released')),
       provider_request_id TEXT,
-      created_at_ms INTEGER NOT NULL,
-      settled_at_ms INTEGER
+      created_at_ms BIGINT NOT NULL,
+      settled_at_ms BIGINT
     )`,
     `CREATE INDEX IF NOT EXISTS idx_usage_user_period
       ON usage_ledger(user_id, period_start_ms, period_end_ms, status)`,
@@ -90,14 +90,14 @@ export async function initializeDatabase(db: Client = client): Promise<void> {
       step_count INTEGER NOT NULL DEFAULT 0,
       last_action_signature TEXT,
       repeat_count INTEGER NOT NULL DEFAULT 0,
-      created_at_ms INTEGER NOT NULL,
-      updated_at_ms INTEGER NOT NULL
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id, updated_at_ms DESC)`,
     `CREATE TABLE IF NOT EXISTS stripe_events (
       event_id TEXT PRIMARY KEY,
       event_type TEXT NOT NULL,
-      received_at_ms INTEGER NOT NULL
+      received_at_ms BIGINT NOT NULL
     )`,
     // Local authentication identity. Passwords are only ever stored as a scrypt
     // hash plus a per-user random salt, never as plaintext. When the Supabase
@@ -108,17 +108,17 @@ export async function initializeDatabase(db: Client = client): Promise<void> {
       email_verified INTEGER NOT NULL DEFAULT 0,
       password_hash TEXT NOT NULL,
       password_salt TEXT NOT NULL,
-      created_at_ms INTEGER NOT NULL
+      created_at_ms BIGINT NOT NULL
     )`,
     // A login session. Refresh tokens hang off a session so that a single reuse
     // can revoke the whole session at once.
     `CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
-      created_at_ms INTEGER NOT NULL,
-      last_seen_at_ms INTEGER NOT NULL,
-      expires_at_ms INTEGER NOT NULL,
-      revoked_at_ms INTEGER
+      created_at_ms BIGINT NOT NULL,
+      last_seen_at_ms BIGINT NOT NULL,
+      expires_at_ms BIGINT NOT NULL,
+      revoked_at_ms BIGINT
     )`,
     `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
     // Single-use rotating refresh tokens. Only the hash of the opaque token is
@@ -128,8 +128,8 @@ export async function initializeDatabase(db: Client = client): Promise<void> {
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
       token_hash TEXT NOT NULL UNIQUE,
-      created_at_ms INTEGER NOT NULL,
-      used_at_ms INTEGER,
+      created_at_ms BIGINT NOT NULL,
+      used_at_ms BIGINT,
       replaced_by TEXT
     )`,
     `CREATE INDEX IF NOT EXISTS idx_refresh_session ON refresh_tokens(session_id)`,
@@ -142,8 +142,8 @@ export async function initializeDatabase(db: Client = client): Promise<void> {
       project_id TEXT,
       title TEXT NOT NULL,
       model TEXT NOT NULL,
-      created_at_ms INTEGER NOT NULL,
-      updated_at_ms INTEGER NOT NULL
+      created_at_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS idx_conversations_user
       ON conversations(user_id, updated_at_ms DESC)`,
@@ -155,7 +155,7 @@ export async function initializeDatabase(db: Client = client): Promise<void> {
       conversation_id TEXT NOT NULL,
       role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
       content_json TEXT NOT NULL,
-      created_at_ms INTEGER NOT NULL
+      created_at_ms BIGINT NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS idx_messages_conversation
       ON messages(conversation_id, created_at_ms ASC)`,
@@ -169,12 +169,12 @@ export async function initializeDatabase(db: Client = client): Promise<void> {
       conversation_id TEXT,
       filename TEXT NOT NULL,
       mime_type TEXT NOT NULL,
-      size_bytes INTEGER NOT NULL,
+      size_bytes BIGINT NOT NULL,
       kind TEXT NOT NULL CHECK (kind IN ('pdf', 'image', 'text')),
       media_type TEXT NOT NULL,
       content_text TEXT,
       content_base64 TEXT,
-      created_at_ms INTEGER NOT NULL
+      created_at_ms BIGINT NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS idx_attachments_user
       ON attachments(user_id, created_at_ms DESC)`
@@ -189,15 +189,32 @@ export async function initializeDatabase(db: Client = client): Promise<void> {
   await addColumnIfMissing(db, "runs", "repeat_count", "INTEGER NOT NULL DEFAULT 0");
 }
 
-async function addColumnIfMissing(db: Client, table: string, column: string, definition: string): Promise<void> {
+async function addColumnIfMissing(db: DatabaseClient, table: string, column: string, definition: string): Promise<void> {
+  // Postgres supports ADD COLUMN IF NOT EXISTS directly, so the migration is a
+  // no-op when the column is already present and never throws.
+  if (db.dialect === "postgres") {
+    await db.execute(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${definition}`);
+    return;
+  }
   try {
     await db.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   } catch (error) {
     const message = error instanceof Error ? error.message.toLowerCase() : "";
     // A duplicate column name means the migration already ran. Anything else is
     // a real failure and must surface.
-    if (!message.includes("duplicate column")) throw error;
+    if (!message.includes("duplicate column") && !message.includes("already exists")) throw error;
   }
+}
+
+// A strictly increasing millisecond clock for ordering rows written in quick
+// succession within this process (for example a user turn and its assistant
+// reply). When the wall clock has not advanced, the previous value is bumped by
+// one so two inserts never share a timestamp.
+let lastTimestampMs = 0;
+function nextTimestampMs(): number {
+  const now = Date.now();
+  lastTimestampMs = now > lastTimestampMs ? now : lastTimestampMs + 1;
+  return lastTimestampMs;
 }
 
 function asNumber(value: unknown): number {
@@ -268,10 +285,12 @@ export async function upsertSubscription(input: SubscriptionRow): Promise<void> 
 }
 
 export async function recordStripeEvent(eventId: string, eventType: string): Promise<boolean> {
-  const result = await client.execute({
-    sql: "INSERT OR IGNORE INTO stripe_events(event_id, event_type, received_at_ms) VALUES (?, ?, ?)",
-    args: [eventId, eventType, Date.now()]
-  });
+  // Insert-or-ignore differs by dialect. Either way a fresh insert affects one
+  // row (first time the event is seen) and a duplicate affects zero (idempotent).
+  const sql = client.dialect === "postgres"
+    ? "INSERT INTO stripe_events(event_id, event_type, received_at_ms) VALUES (?, ?, ?) ON CONFLICT (event_id) DO NOTHING"
+    : "INSERT OR IGNORE INTO stripe_events(event_id, event_type, received_at_ms) VALUES (?, ?, ?)";
+  const result = await client.execute({ sql, args: [eventId, eventType, Date.now()] });
   return result.rowsAffected === 1;
 }
 
@@ -652,7 +671,10 @@ export async function addMessage(input: {
   role: "user" | "assistant";
   content: unknown[];
 }): Promise<MessageRow> {
-  const now = Date.now();
+  // A process-monotonic timestamp guarantees the user turn sorts before the
+  // assistant turn even if both land in the same millisecond, so transcript
+  // order does not depend on a dialect-specific tiebreaker like SQLite rowid.
+  const now = nextTimestampMs();
   await client.execute({
     sql: `INSERT INTO messages(id, conversation_id, role, content_json, created_at_ms)
       VALUES (?, ?, ?, ?, ?)`,
@@ -670,7 +692,7 @@ export async function addMessage(input: {
 /** All messages in a conversation, oldest first, for replay and reload. */
 export async function getMessages(conversationId: string): Promise<MessageRow[]> {
   const result = await client.execute({
-    sql: "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at_ms ASC, rowid ASC",
+    sql: "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at_ms ASC, id ASC",
     args: [conversationId]
   });
   return result.rows.map((row) => mapMessage(row as unknown as Record<string, unknown>));
