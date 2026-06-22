@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { SignJWT } from "jose";
 import { z } from "zod";
 import { config } from "./config.js";
-import { resetEmailMessage, sendEmail, verifyEmailMessage } from "./email.js";
+import { emailProvider, resetEmailMessage, sendEmail, verifyEmailMessage } from "./email.js";
 import {
   consumeEmailToken,
   createEmailToken,
@@ -334,15 +334,21 @@ export class LocalAuthProvider implements AuthProvider {
 
   async reset(email: string): Promise<void> {
     const normalized = normalizeEmail(email);
+    const masked = normalized.replace(/^(.).*(@.*)$/, "$1***$2");
     const user = await getUserByEmail(normalized);
     // Always resolve so the caller cannot tell whether the email exists. Only
-    // send a link when there is actually an account.
-    if (!user) return;
+    // send a link when there is actually an account. The diagnostics below make
+    // the outcome visible in the server log without leaking the address.
+    if (!user) {
+      console.info(`[WorkCrew] password reset requested but NO ACCOUNT exists for ${masked} on this backend; nothing sent.`);
+      return;
+    }
     const token = await issueEmailToken(user, "reset", RESET_TOKEN_TTL_MS);
     try {
       await sendEmail(resetEmailMessage(user.email, resetLink(token)));
+      console.info(`[WorkCrew] password reset email handed to the "${emailProvider().name}" provider for ${masked}.`);
     } catch (error) {
-      console.error("[WorkCrew] reset email failed to send", error instanceof Error ? error.message : error);
+      console.error("[WorkCrew] reset email FAILED to send", error instanceof Error ? error.message : error);
     }
   }
 
