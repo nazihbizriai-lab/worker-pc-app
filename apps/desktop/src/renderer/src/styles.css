@@ -172,7 +172,9 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 /* Update pill at the bottom of the sidebar, like the Claude desktop app. It is
    informational while downloading and becomes a clickable "Restart to update"
    with a soft green pulse once a new version is ready to install. */
-.update-pill { display: flex; align-items: center; gap: 9px; width: 100%; margin: 0 0 12px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: default; text-align: left; color: var(--muted); background: var(--panel-2); font-size: 12px; font-weight: 600; }
+.update-pill { display: flex; align-items: center; gap: 9px; width: 100%; margin: 0 0 12px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; text-align: left; color: var(--muted); background: var(--panel-2); font-size: 12px; font-weight: 600; }
+.update-pill:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
+.update-pill:disabled { cursor: default; }
 .update-pill .update-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: #747e8a; }
 .update-ready { cursor: pointer; color: var(--text); border-color: #4a3d77; background: linear-gradient(180deg, rgba(139,92,246,.2), rgba(139,92,246,.07)); }
 .update-ready:hover { border-color: var(--accent); }

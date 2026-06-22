@@ -430,6 +430,26 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
 
   const planLabel = entitlement.plan ? PLAN_CATALOG[entitlement.plan].name : "No plan";
 
+  // The always-visible update control at the bottom of the sidebar. It shows
+  // "Check for updates" normally, the progress while downloading, and a clickable
+  // "Restart to update" when a new version is ready.
+  const updateState = update?.state ?? "idle";
+  const updateReady = updateState === "ready";
+  const updateBusy = updateState === "checking" || updateState === "downloading";
+  const updateText =
+    updateState === "ready" ? "Restart to update"
+      : updateState === "downloading" ? `Downloading update ${update?.percent ?? 0}%`
+        : updateState === "checking" ? "Checking for updates"
+          : updateState === "available" ? "Update available"
+            : updateState === "error" ? "Update failed. Try again"
+              : "Check for updates";
+  function handleUpdateClick() {
+    if (updateReady) { void window.workcrew.updates.install(); return; }
+    if (updateBusy) return;
+    setUpdate({ state: "checking" });
+    void window.workcrew.updates.check(true);
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -495,23 +515,16 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
             </span>
           </button>
         )}
-        {update && (update.state === "ready" || update.state === "downloading" || update.state === "available") && (
-          <button
-            className={`update-pill ${update.state === "ready" ? "update-ready" : ""}`}
-            onClick={() => { if (update.state === "ready") void window.workcrew.updates.install(); }}
-            disabled={update.state !== "ready"}
-            aria-label={update.state === "ready" ? "Restart to update WorkCrew" : "Update in progress"}
-          >
-            <span className="update-dot" aria-hidden="true" />
-            <span>
-              {update.state === "ready"
-                ? "Restart to update"
-                : update.state === "downloading"
-                  ? `Downloading update ${update.percent ?? 0}%`
-                  : "Update available"}
-            </span>
-          </button>
-        )}
+        <button
+          className={`update-pill ${updateReady ? "update-ready" : ""}`}
+          onClick={handleUpdateClick}
+          disabled={updateBusy}
+          aria-label={updateText}
+          title={updateText}
+        >
+          <span className="update-dot" aria-hidden="true" />
+          <span>{updateText}</span>
+        </button>
         <div className="sidebar-security"><span className="shield">S</span><div><strong>Protected locally</strong><small>Write actions ask first</small></div></div>
         <button className="account-button" onClick={() => setAccountOpen(true)} aria-label="Open account">
           <span className="avatar">A</span>
