@@ -99,12 +99,17 @@ export async function reserveBudget(input: {
 }
 
 export async function settleBudget(reservationId: string, actualMicrodollars: number, providerRequestId?: string): Promise<void> {
+  // Clamp the settled amount to the reserved amount. A CASE expression does this
+  // in both SQLite and Postgres; SQLite's two-argument MIN() does not exist in
+  // Postgres. The clamp amount is bound twice (once per branch).
+  const amount = Math.max(0, Math.ceil(actualMicrodollars));
   await client.execute({
     sql: `UPDATE usage_ledger
-      SET status = 'settled', actual_microdollars = MIN(reserved_microdollars, ?),
+      SET status = 'settled',
+          actual_microdollars = CASE WHEN reserved_microdollars < ? THEN reserved_microdollars ELSE ? END,
           provider_request_id = ?, settled_at_ms = ?
       WHERE id = ? AND status = 'reserved'`,
-    args: [Math.max(0, Math.ceil(actualMicrodollars)), providerRequestId ?? null, Date.now(), reservationId]
+    args: [amount, amount, providerRequestId ?? null, Date.now(), reservationId]
   });
 }
 
