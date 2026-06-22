@@ -1,12 +1,65 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { app } from "electron";
 import { windowsActionSchema } from "@workcrew/contracts";
+
+// Where the packaged Windows helper executable lives. In an installed build it
+// is bundled under the app resources; in development it is the PyInstaller output
+// under python/windows-agent/dist. An explicit WORKCREW_WINDOWS_AGENT env var
+// overrides both.
+function defaultAgentPath(): string {
+  if (app.isPackaged) return join(process.resourcesPath, "windows-agent", "workcrew-windows-agent.exe");
+  return join(app.getAppPath(), "..", "..", "python", "windows-agent", "dist", "workcrew-windows-agent.exe");
+}
+
+// Friendly app names mapped to the command Windows uses to start them. Anything
+// not listed is passed through as-is, so registered apps (Spotify, Chrome, etc.)
+// still launch by name.
+const APP_TARGETS: Record<string, string> = {
+  excel: "excel",
+  "microsoft excel": "excel",
+  word: "winword",
+  "microsoft word": "winword",
+  powerpoint: "powerpnt",
+  "microsoft powerpoint": "powerpnt",
+  outlook: "outlook",
+  onenote: "onenote",
+  notepad: "notepad",
+  wordpad: "write",
+  calculator: "calc",
+  calc: "calc",
+  paint: "mspaint",
+  "file explorer": "explorer",
+  explorer: "explorer",
+  files: "explorer",
+  "command prompt": "cmd",
+  terminal: "wt"
+};
+
+function resolveAppTarget(name: string): string | null {
+  const key = name.trim().toLowerCase();
+  if (!key) return null;
+  return APP_TARGETS[key] ?? key.replace(/\.exe$/i, "");
+}
 
 export class WindowsAgent {
   private process: ChildProcess | null = null;
   private endpoint: string | null = null;
   private token: string | null = null;
   private healthChecked = false;
+
+  // Open a desktop app by name. Launching is done here with the Windows "start"
+  // command rather than the helper, so it works without any extra setup; the
+  // helper is only needed to inspect and control the window afterwards.
+  private async launchApp(name: string): Promise<string> {
+    const target = resolveAppTarget(name);
+    if (!target) throw new Error("Tell me which app to open, for example Excel or Notepad.");
+    const child = spawn("cmd", ["/c", "start", "", target], { windowsHide: true, detached: true, stdio: "ignore", shell: false });
+    child.unref();
+    return `Opened ${name.trim() || target}.`;
+  }
 
   private reset(): void {
     this.process = null;
@@ -17,8 +70,10 @@ export class WindowsAgent {
 
   private async start(): Promise<void> {
     if (this.endpoint && this.token) return;
-    const executable = process.env.WORKCREW_WINDOWS_AGENT;
-    if (!executable) throw new Error("The WorkCrew Windows helper is not installed on this test machine");
+    const executable = process.env.WORKCREW_WINDOWS_AGENT ?? defaultAgentPath();
+    if (!existsSync(executable)) {
+      throw new Error("The WorkCrew Windows helper is not installed. Reinstall the app to enable Windows app automation.");
+    }
     const token = randomBytes(32).toString("hex");
     const child = spawn(executable, ["--host", "127.0.0.1", "--port", "0", "--token", token], {
       windowsHide: true,
@@ -80,6 +135,11 @@ export class WindowsAgent {
 
   async execute(rawAction: unknown): Promise<string> {
     const action = windowsActionSchema.parse(rawAction);
+    // Launching an app does not need the helper, so handle it directly. Every
+    // other command drives an existing window through the helper (pywinauto).
+    if (action.command === "launch") {
+      return this.launchApp(action.application ?? "");
+    }
     await this.start();
     await this.probeHealth();
     let response: Response;

@@ -5,7 +5,7 @@ export function actionNeedsApproval(action: AutomationAction): boolean {
   if (action.kind === "browser") {
     return new Set(["click", "fill", "type", "press", "select", "check", "uncheck"]).has(action.command);
   }
-  return new Set(["click", "set-text", "type-keys"]).has(action.command);
+  return new Set(["launch", "click", "set-text", "type-keys"]).has(action.command);
 }
 
 export function redactResult(value: string): string {

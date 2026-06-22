@@ -33,10 +33,12 @@ export function actionLabel(action: AutomationAction): string {
     }
   }
   switch (action.command) {
+    case "launch":
+      return "Open an app";
     case "list-windows":
       return "See open apps";
     case "connect":
-      return "Open a desktop app";
+      return "Connect to a desktop app";
     case "inspect":
       return "Read a desktop window";
     case "click":

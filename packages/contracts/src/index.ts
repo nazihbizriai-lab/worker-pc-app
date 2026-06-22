@@ -68,6 +68,7 @@ export const browserActionSchema = z.object({
 }).strict();
 
 export const windowsCommandSchema = z.enum([
+  "launch",
   "list-windows",
   "connect",
   "inspect",
