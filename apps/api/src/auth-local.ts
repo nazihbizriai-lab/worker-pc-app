@@ -20,6 +20,7 @@ import {
   getSessionByRefreshToken,
   getUserByEmail,
   getUserById,
+  invalidateUnusedEmailTokens,
   revokeSession,
   rotateRefreshToken,
   setUserEmailVerified,
@@ -140,6 +141,8 @@ function newEmailToken(): { token: string; hash: string } {
 // Create and persist an email token, returning the raw value to put in a link.
 async function issueEmailToken(user: UserRow, purpose: "verify" | "reset", ttlMs: number): Promise<string> {
   const { token, hash } = newEmailToken();
+  // Retire any older unused link of the same purpose so only the newest is valid.
+  await invalidateUnusedEmailTokens(user.id, purpose);
   await createEmailToken({
     id: randomUUID(),
     userId: user.id,

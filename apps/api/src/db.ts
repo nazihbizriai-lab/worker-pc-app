@@ -298,6 +298,15 @@ export async function upsertSubscription(input: SubscriptionRow): Promise<void> 
   });
 }
 
+/** Whether a Stripe event id has already been processed and recorded. */
+export async function hasStripeEvent(eventId: string): Promise<boolean> {
+  const result = await client.execute({
+    sql: "SELECT 1 FROM stripe_events WHERE event_id = ? LIMIT 1",
+    args: [eventId]
+  });
+  return result.rows.length > 0;
+}
+
 export async function recordStripeEvent(eventId: string, eventType: string): Promise<boolean> {
   // Insert-or-ignore differs by dialect. Either way a fresh insert affects one
   // row (first time the event is seen) and a duplicate affects zero (idempotent).
@@ -636,6 +645,18 @@ export async function createEmailToken(input: {
     sql: `INSERT INTO email_tokens(id, user_id, email, purpose, token_hash, expires_at_ms, used_at_ms, created_at_ms)
       VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
     args: [input.id, input.userId, input.email, input.purpose, input.tokenHash, input.expiresAtMs, Date.now()]
+  });
+}
+
+/**
+ * Mark every still-unused token of a given purpose for a user as used. Called
+ * before issuing a new verify or reset link so only the newest link is ever
+ * valid, which narrows the window if an older email is intercepted.
+ */
+export async function invalidateUnusedEmailTokens(userId: string, purpose: "verify" | "reset"): Promise<void> {
+  await client.execute({
+    sql: "UPDATE email_tokens SET used_at_ms = ? WHERE user_id = ? AND purpose = ? AND used_at_ms IS NULL",
+    args: [Date.now(), userId, purpose]
   });
 }
 

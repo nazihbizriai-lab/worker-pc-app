@@ -43,6 +43,13 @@ export function normalizeBackendUrl(raw: string): string {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("The backend address must start with http:// or https://");
   }
+  // Require https for any real host so login credentials and tokens are never
+  // sent in clear text. Plain http is allowed only for a local loopback backend
+  // used in development.
+  const isLoopback = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
+  if (url.protocol === "http:" && !isLoopback) {
+    throw new Error("For your security the backend address must use https://");
+  }
   return `${url.origin}${url.pathname}`.replace(/\/$/, "");
 }
 

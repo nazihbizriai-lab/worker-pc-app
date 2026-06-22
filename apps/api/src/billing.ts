@@ -4,6 +4,7 @@ import { config } from "./config.js";
 import {
   getSubscription,
   getSubscriptionByStripeId,
+  hasStripeEvent,
   recordStripeEvent,
   upsertSubscription,
   type SubscriptionRow
@@ -172,8 +173,12 @@ export async function handleStripeWebhook(rawBody: Buffer, signature: string): P
   const client = requireStripe();
   if (!config.stripeWebhookSecret) throw new Error("Stripe webhook secret is not configured");
   const event = client.webhooks.constructEvent(rawBody, signature, config.stripeWebhookSecret);
-  const firstDelivery = await recordStripeEvent(event.id, event.type);
-  if (!firstDelivery) return;
+
+  // Skip an event we have already fully processed. We check BEFORE processing but
+  // record only AFTER, so an event whose handler throws is never marked done and
+  // Stripe's automatic retry reprocesses it. The handlers below are idempotent
+  // (upsert by subscription), so a rare reprocess is harmless.
+  if (await hasStripeEvent(event.id)) return;
 
   switch (event.type) {
     case "customer.subscription.created":
@@ -193,4 +198,7 @@ export async function handleStripeWebhook(rawBody: Buffer, signature: string): P
     default:
       break;
   }
+
+  // Mark handled only after the switch succeeded.
+  await recordStripeEvent(event.id, event.type);
 }

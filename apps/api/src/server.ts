@@ -193,12 +193,18 @@ app.get("/billing/cancel", async (_request, reply) => {
 // be swapped in behind the same routes later.
 // ---------------------------------------------------------------------------
 
-app.post("/v1/auth/sign-up", async (request) => {
+// Tight per-route limits on the credential and email endpoints, keyed by IP
+// (these requests carry no Authorization header, so the global keyGenerator
+// falls back to request.ip). This is the brute-force and email-spam guard that
+// the broad global limit is too loose to provide.
+const authLimit = (max: number) => ({ config: { rateLimit: { max, timeWindow: "1 minute" } } });
+
+app.post("/v1/auth/sign-up", authLimit(8), async (request) => {
   const body = signUpInputSchema.parse(request.body);
   return localAuthProvider.signUp(body.email, body.password);
 });
 
-app.post("/v1/auth/sign-in", async (request) => {
+app.post("/v1/auth/sign-in", authLimit(10), async (request) => {
   const body = signInInputSchema.parse(request.body);
   return { session: await localAuthProvider.signIn(body.email, body.password) };
 });
@@ -214,14 +220,14 @@ app.post("/v1/auth/sign-out", async (request) => {
   return { ok: true };
 });
 
-app.post("/v1/auth/reset", async (request) => {
+app.post("/v1/auth/reset", authLimit(6), async (request) => {
   // Always returns ok so the response never reveals whether the email exists.
   const body = resetInputSchema.parse(request.body);
   await localAuthProvider.reset(body.email);
   return { ok: true };
 });
 
-app.post("/v1/auth/reset-confirm", async (request) => {
+app.post("/v1/auth/reset-confirm", authLimit(12), async (request) => {
   const body = resetConfirmInputSchema.parse(request.body);
   try {
     await localAuthProvider.confirmReset(body.token, body.password);
@@ -250,7 +256,7 @@ button{width:100%;padding:12px;border:0;border-radius:10px;background:#8b5cf6;co
     .send(page);
 }
 
-app.get<{ Querystring: { token?: string } }>("/v1/auth/verify", async (request, reply) => {
+app.get<{ Querystring: { token?: string } }>("/v1/auth/verify", authLimit(12), async (request, reply) => {
   const token = typeof request.query.token === "string" ? request.query.token : "";
   try {
     verifyTokenSchema.parse({ token });
