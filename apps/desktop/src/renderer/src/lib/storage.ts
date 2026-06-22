@@ -120,6 +120,106 @@ export function removeSchedule(scheduleId: string): Schedule[] {
   return next;
 }
 
+// Routines (scheduled automations that run while WorkCrew is open) -----------
+
+export type RoutineCadence = "manual" | "hourly" | "daily" | "weekdays" | "weekly";
+
+export type Routine = {
+  id: string;
+  name: string;
+  task: string;
+  cadence: RoutineCadence;
+  // Time of day for daily/weekdays/weekly, in local time.
+  hour: number;
+  minute: number;
+  // Day of week (0 Sunday .. 6 Saturday) for weekly.
+  weekday: number;
+  enabled: boolean;
+  lastRunAtMs: number | null;
+  createdAtMs: number;
+};
+
+const ROUTINES_KEY = "routines";
+const HOUR_MS = 60 * 60 * 1000;
+
+export function loadRoutines(): Routine[] {
+  return read<Routine[]>(ROUTINES_KEY, []);
+}
+
+export function addRoutine(input: Omit<Routine, "id" | "createdAtMs" | "lastRunAtMs">): Routine[] {
+  const routine: Routine = { ...input, id: id(), lastRunAtMs: null, createdAtMs: Date.now() };
+  const next = [routine, ...loadRoutines()];
+  write(ROUTINES_KEY, next);
+  return next;
+}
+
+export function updateRoutine(routineId: string, patch: Partial<Routine>): Routine[] {
+  const next = loadRoutines().map((routine) => (routine.id === routineId ? { ...routine, ...patch } : routine));
+  write(ROUTINES_KEY, next);
+  return next;
+}
+
+export function removeRoutine(routineId: string): Routine[] {
+  const next = loadRoutines().filter((routine) => routine.id !== routineId);
+  write(ROUTINES_KEY, next);
+  return next;
+}
+
+export function markRoutineRan(routineId: string, atMs: number): Routine[] {
+  return updateRoutine(routineId, { lastRunAtMs: atMs });
+}
+
+/**
+ * Whether a routine is due to run at nowMs. Pure and deterministic given its
+ * inputs. Manual and disabled routines never run automatically. Hourly runs at
+ * most once per hour. Time-of-day cadences run once on or after their scheduled
+ * time, gated to weekdays or a chosen weekday, and not again until the next
+ * eligible day.
+ */
+export function isRoutineDue(routine: Routine, nowMs: number): boolean {
+  if (!routine.enabled || routine.cadence === "manual") return false;
+
+  if (routine.cadence === "hourly") {
+    return routine.lastRunAtMs === null || nowMs - routine.lastRunAtMs >= HOUR_MS;
+  }
+
+  const now = new Date(nowMs);
+  const day = now.getDay();
+  if (routine.cadence === "weekdays" && (day === 0 || day === 6)) return false;
+  if (routine.cadence === "weekly" && day !== routine.weekday) return false;
+
+  const scheduled = new Date(nowMs);
+  scheduled.setHours(routine.hour, routine.minute, 0, 0);
+  const scheduledMs = scheduled.getTime();
+  if (nowMs < scheduledMs) return false;
+  // Already ran on or after today's scheduled time.
+  if (routine.lastRunAtMs !== null && routine.lastRunAtMs >= scheduledMs) return false;
+  return true;
+}
+
+/** The first due routine at nowMs, or null. Routines are checked newest first. */
+export function nextDueRoutine(routines: Routine[], nowMs: number): Routine | null {
+  return routines.find((routine) => isRoutineDue(routine, nowMs)) ?? null;
+}
+
+// Friendly one-line schedule description for the routine list.
+export function describeCadence(routine: Routine): string {
+  const time = `${String(routine.hour).padStart(2, "0")}:${String(routine.minute).padStart(2, "0")}`;
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  switch (routine.cadence) {
+    case "manual":
+      return "Only when you run it";
+    case "hourly":
+      return "Every hour";
+    case "daily":
+      return `Every day at ${time}`;
+    case "weekdays":
+      return `Weekdays at ${time}`;
+    case "weekly":
+      return `Every ${days[routine.weekday] ?? "week"} at ${time}`;
+  }
+}
+
 // Permissions ----------------------------------------------------------------
 // The security model (see SECURITY.md and security.ts) requires explicit
 // approval for browser and Windows write actions, and keeps consequential

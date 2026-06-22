@@ -126,6 +126,21 @@ test("automation runs a task to completion", async () => {
   await expect(page.locator(".app-shell")).toBeVisible();
 });
 
+test("a routine can be created and run on demand", async () => {
+  await page.getByRole("button", { name: "Routines" }).click();
+  await page.getByPlaceholder(/Name, for example/).fill("My test routine");
+  await page.getByPlaceholder(/What should it do/).fill("open a web page and read it");
+  // Manual cadence so the background scheduler does not also fire it.
+  await page.getByLabel("How often").selectOption("manual");
+  await page.getByRole("button", { name: "Save routine" }).click();
+  await expect(page.getByText("My test routine")).toBeVisible();
+  await page.getByRole("button", { name: "Run now" }).click();
+  // The shared runner reports status inside the panel and reaches a result.
+  await expect(page.locator(".automation-summary")).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Close panel" }).click();
+  await expect(page.locator(".app-shell")).toBeVisible();
+});
+
 test("settings shows the backend address and app version", async () => {
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByLabel("Backend address")).toBeVisible();

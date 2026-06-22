@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   PLAN_CATALOG,
   type AttachmentRef,
@@ -13,14 +13,24 @@ import { DEFAULT_CHAT_MODEL, turnsFromMessages } from "./lib/chat";
 import { useChatStream } from "./hooks/useChatStream";
 import { ChatView } from "./components/ChatView";
 import { AutomationPanel } from "./components/AutomationPanel";
+import { RoutinesPanel } from "./components/RoutinesPanel";
 import { PermissionsPanel } from "./components/PermissionsPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { AccountDialog } from "./components/AccountDialog";
-import { loadPermissions, type PermissionState } from "./lib/storage";
+import { ApprovalModal } from "./components/ApprovalModal";
+import { useAutomationRunner } from "./hooks/useAutomationRunner";
+import {
+  loadPermissions,
+  loadRoutines,
+  markRoutineRan,
+  nextDueRoutine,
+  type PermissionState,
+  type Routine
+} from "./lib/storage";
 
 type AppInfo = { name: string; version: string; authMode: string; billingMode: string };
 type Phase = "loading" | "auth" | "paywall" | "workspace";
-type PanelView = "chat" | "automation" | "permissions" | "settings";
+type PanelView = "chat" | "automation" | "routines" | "permissions" | "settings";
 
 const EMPTY_ENTITLEMENT: SubscriptionState = {
   active: false,
@@ -204,11 +214,32 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
   const [view, setView] = useState<PanelView>("chat");
   const [accountOpen, setAccountOpen] = useState(false);
   const [permissions, setPermissions] = useState<PermissionState>(() => loadPermissions());
+  const [routines, setRoutines] = useState<Routine[]>(() => loadRoutines());
   const [recents, setRecents] = useState<ConversationSummary[]>([]);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
   const chat = useChatStream();
+  const runner = useAutomationRunner();
   const { conversationId, usedTokens } = chat;
+
+  // Scheduler: while the app is open, check every 30 seconds for a routine that
+  // is due, and run it through the shared runner when nothing else is running.
+  // Held in a ref so the interval always sees the latest routines and run state.
+  const schedulerState = useRef({ routines, running: runner.running });
+  schedulerState.current = { routines, running: runner.running };
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const { routines: current, running } = schedulerState.current;
+      if (running) return;
+      const due = nextDueRoutine(current, Date.now());
+      if (!due) return;
+      setRoutines(markRoutineRan(due.id, Date.now()));
+      void runner.run(due.task, model, due.name);
+    }, 30_000);
+    return () => clearInterval(timer);
+    // runner.run and model are stable enough; the ref carries live state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Usage shown in the header. It starts from the entitlement and updates to the
   // latest value reported by a completed chat turn (done frame usage).
@@ -288,6 +319,13 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
             onClick={() => setView("automation")}
           >
             <span>A</span> Automation
+          </button>
+          <button
+            className={view === "routines" ? "nav-active" : ""}
+            aria-current={view === "routines" ? "page" : undefined}
+            onClick={() => setView("routines")}
+          >
+            <span>R</span> Routines
           </button>
           <button
             className={view === "permissions" ? "nav-active" : ""}
@@ -372,8 +410,12 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
           onChange={setPermissions}
         />
       )}
-      {view === "automation" && <AutomationPanel model={model} onClose={() => setView("chat")} />}
+      {view === "automation" && <AutomationPanel runner={runner} model={model} onClose={() => setView("chat")} />}
+      {view === "routines" && (
+        <RoutinesPanel runner={runner} model={model} routines={routines} onChange={setRoutines} onClose={() => setView("chat")} />
+      )}
       {view === "settings" && <SettingsPanel info={info} onClose={() => setView("chat")} />}
+      {runner.pending && <ApprovalModal action={runner.pending.action} label={runner.pending.label} onDecide={runner.decide} />}
       {accountOpen && (
         <AccountDialog
           entitlement={entitlement}

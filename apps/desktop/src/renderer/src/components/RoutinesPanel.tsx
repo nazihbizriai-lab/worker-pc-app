@@ -1,0 +1,149 @@
+import { useState } from "react";
+import type { ModelTier } from "@workcrew/contracts";
+import type { AutomationRunner } from "../hooks/useAutomationRunner";
+import {
+  addRoutine,
+  describeCadence,
+  removeRoutine,
+  updateRoutine,
+  type Routine,
+  type RoutineCadence
+} from "../lib/storage";
+import { PanelShell } from "./PanelShell";
+
+// Routines are saved tasks that run on a schedule while WorkCrew is open. The
+// user can also run any routine immediately. Routines are stored locally; the
+// scheduler that fires them lives in the workspace.
+
+const CADENCES: { value: RoutineCadence; label: string }[] = [
+  { value: "manual", label: "Only when I run it" },
+  { value: "hourly", label: "Every hour" },
+  { value: "daily", label: "Every day" },
+  { value: "weekdays", label: "Weekdays" },
+  { value: "weekly", label: "Weekly" }
+];
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+export function RoutinesPanel({
+  runner,
+  model,
+  routines,
+  onChange,
+  onClose
+}: {
+  runner: AutomationRunner;
+  model: ModelTier;
+  routines: Routine[];
+  onChange: (next: Routine[]) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [task, setTask] = useState("");
+  const [cadence, setCadence] = useState<RoutineCadence>("daily");
+  const [hour, setHour] = useState(9);
+  const [minute, setMinute] = useState(0);
+  const [weekday, setWeekday] = useState(1);
+
+  const timed = cadence === "daily" || cadence === "weekdays" || cadence === "weekly";
+  const canSave = name.trim().length > 0 && task.trim().length >= 3;
+
+  function save() {
+    if (!canSave) return;
+    onChange(addRoutine({ name: name.trim(), task: task.trim(), cadence, hour, minute, weekday, enabled: true }));
+    setName("");
+    setTask("");
+  }
+
+  function runNow(routine: Routine) {
+    if (runner.running) return;
+    void runner.run(routine.task, model, routine.name);
+  }
+
+  return (
+    <PanelShell title="Routines" subtitle="Save a task and have WorkCrew run it on a schedule." onClose={onClose}>
+      <div className="save-form">
+        <label className="field-label" htmlFor="routine-name">New routine</label>
+        <input id="routine-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Name, for example Morning email summary" />
+        <textarea
+          className="automation-task"
+          value={task}
+          onChange={(event) => setTask(event.target.value)}
+          placeholder="What should it do? For example: open my email and summarize the unread messages"
+          rows={2}
+        />
+        <div className="routine-schedule">
+          <select value={cadence} onChange={(event) => setCadence(event.target.value as RoutineCadence)} aria-label="How often">
+            {CADENCES.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+          {cadence === "weekly" && (
+            <select value={weekday} onChange={(event) => setWeekday(Number(event.target.value))} aria-label="Day of week">
+              {WEEKDAYS.map((day, index) => (
+                <option key={day} value={index}>{day}</option>
+              ))}
+            </select>
+          )}
+          {timed && (
+            <>
+              <select value={hour} onChange={(event) => setHour(Number(event.target.value))} aria-label="Hour">
+                {Array.from({ length: 24 }, (_, h) => (
+                  <option key={h} value={h}>{String(h).padStart(2, "0")}</option>
+                ))}
+              </select>
+              <span className="colon">:</span>
+              <select value={minute} onChange={(event) => setMinute(Number(event.target.value))} aria-label="Minute">
+                {[0, 15, 30, 45].map((m) => (
+                  <option key={m} value={m}>{String(m).padStart(2, "0")}</option>
+                ))}
+              </select>
+            </>
+          )}
+        </div>
+        <div className="save-row">
+          <button className="primary" onClick={save} disabled={!canSave}>Save routine</button>
+        </div>
+        <p className="field-hint">Routines run while WorkCrew is open, and ask before any change just like a normal task.</p>
+      </div>
+
+      {(runner.running || runner.summary) && (
+        <div className={`automation-summary ${runner.status}`} role="status">
+          <strong>{runner.label || "Routine"}: {runner.running ? "Running..." : runner.status === "complete" ? "Done" : "Stopped"}</strong>
+          {runner.summary && <p>{runner.summary}</p>}
+        </div>
+      )}
+
+      {routines.length === 0 ? (
+        <div className="empty-state">
+          <strong>No routines yet</strong>
+          <p>Save a task above to run it on a schedule.</p>
+        </div>
+      ) : (
+        <ul className="record-list">
+          {routines.map((routine) => (
+            <li key={routine.id} className="record-row">
+              <div className="record-main">
+                <p className="record-task"><strong>{routine.name}</strong></p>
+                <p className="record-sub">{routine.task}</p>
+                <div className="record-meta"><span>{describeCadence(routine)}{routine.enabled ? "" : " (paused)"}</span></div>
+              </div>
+              <div className="record-actions">
+                <button className="primary small" onClick={() => runNow(routine)} disabled={runner.running}>Run now</button>
+                <button
+                  className="link-button"
+                  onClick={() => onChange(updateRoutine(routine.id, { enabled: !routine.enabled }))}
+                >
+                  {routine.enabled ? "Pause" : "Resume"}
+                </button>
+                <button className="link-button" onClick={() => onChange(removeRoutine(routine.id))} aria-label={`Remove ${routine.name}`}>
+                  Remove
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </PanelShell>
+  );
+}

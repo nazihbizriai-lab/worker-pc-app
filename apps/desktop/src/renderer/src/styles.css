@@ -181,6 +181,10 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .automation-summary.failed, .automation-summary.stopped { border-color: rgba(217, 138, 147, .5); }
 .automation-summary strong { display: block; margin-bottom: 4px; }
 .automation-summary p { margin: 0; color: var(--muted); font-size: var(--fs-ui); }
+/* Routines: the schedule picker row (cadence, day, time). */
+.routine-schedule { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.routine-schedule select { padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: var(--panel-2); font-size: 13px; }
+.routine-schedule .colon { color: var(--muted); }
 /* Settings: read-only info rows (version, sign in mode, billing mode). */
 .settings-info { margin-top: 18px; }
 .settings-info .record-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
