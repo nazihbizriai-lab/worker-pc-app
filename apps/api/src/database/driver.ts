@@ -15,7 +15,12 @@ interface PgPoolClientLike extends PgClientLike {
 interface PgPoolLike extends PgClientLike {
   connect(): Promise<PgPoolClientLike>;
 }
-type PgModule = { Pool: new (options: { connectionString?: string; max?: number }) => PgPoolLike };
+type PgPoolOptions = {
+  connectionString?: string;
+  max?: number;
+  ssl?: boolean | { rejectUnauthorized?: boolean };
+};
+type PgModule = { Pool: new (options: PgPoolOptions) => PgPoolLike };
 
 // A single, minimal database surface the rest of the API codes against, so the
 // same query functions run unchanged on either SQLite/libSQL (local development
@@ -76,9 +81,18 @@ function createPostgresClient(): DatabaseClient {
       // A specifier typed as a plain string keeps TypeScript from resolving pg's
       // type declarations at build time; Node resolves the package at runtime.
       const specifier: string = "pg";
+      const connectionString = config.databaseUrl ?? "";
+      // A hosted Postgres (Supabase) requires TLS. We skip certificate
+      // verification because the managed provider terminates TLS with its own CA;
+      // the connection is still encrypted. A local Postgres is left plain.
+      const isLocal = /@(localhost|127\.0\.0\.1|\[::1\])/.test(connectionString);
       poolPromise = import(specifier).then((mod: { default?: PgModule } & PgModule) => {
         const Pool = (mod.default ?? mod).Pool;
-        return new Pool({ connectionString: config.databaseUrl, max: 8 });
+        return new Pool({
+          connectionString,
+          max: 8,
+          ssl: isLocal ? undefined : { rejectUnauthorized: false }
+        });
       });
     }
     return poolPromise;
