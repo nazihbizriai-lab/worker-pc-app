@@ -149,7 +149,12 @@ app.get("/health", async () => ({
   version: APP_VERSION,
   mode: config.mockAi ? "mock" : "live",
   authMode: config.authMode,
-  billingMode: config.billingMode
+  billingMode: config.billingMode,
+  // Whether real email sending is configured on this running instance. "resend"
+  // means RESEND_API_KEY is live; "console" means it is not picked up yet and
+  // emails are only logged, not sent.
+  emailMode: config.resendApiKey ? "resend" : "console",
+  emailFromDomain: config.emailFrom.replace(/^.*@/, "").replace(/>?\s*$/, "")
 }));
 
 // Public marketing and download page at the root. Inline style and script need a
