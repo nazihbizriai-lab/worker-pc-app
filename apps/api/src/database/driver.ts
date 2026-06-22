@@ -52,6 +52,26 @@ export function normalizePostgresUrl(raw: string): string {
   return `${protocol}${user}:${encodeURIComponent(password)}@${hostAndRest}`;
 }
 
+// Remove SSL-related query parameters from a connection string so the explicit
+// pool ssl option is the single source of truth. Otherwise a sslmode=require in
+// the URL is treated as verify-full and rejects the managed provider's
+// certificate (self-signed in chain). Runs after normalizePostgresUrl, so the
+// only remaining "?" is the real query separator. Exported for unit testing.
+const SSL_QUERY_KEYS = new Set(["sslmode", "ssl", "sslcert", "sslkey", "sslrootcert", "uselibpqcompat"]);
+export function stripSslQueryParams(url: string): string {
+  const queryStart = url.indexOf("?");
+  if (queryStart === -1) return url;
+  const base = url.slice(0, queryStart);
+  const kept = url
+    .slice(queryStart + 1)
+    .split("&")
+    .filter((pair) => {
+      const key = pair.split("=")[0]?.toLowerCase() ?? "";
+      return key.length > 0 && !SSL_QUERY_KEYS.has(key);
+    });
+  return kept.length > 0 ? `${base}?${kept.join("&")}` : base;
+}
+
 export interface DatabaseClient {
   readonly dialect: DbDialect;
   execute(statement: DbStatement): Promise<DbResult>;
@@ -101,9 +121,9 @@ function createPostgresClient(): DatabaseClient {
       // A specifier typed as a plain string keeps TypeScript from resolving pg's
       // type declarations at build time; Node resolves the package at runtime.
       const specifier: string = "pg";
-      // Normalize so a password containing URL-significant characters connects
-      // correctly rather than failing authentication.
-      const connectionString = normalizePostgresUrl(config.databaseUrl ?? "");
+      // Normalize the password, then strip any SSL query params so the explicit
+      // ssl option below is the only thing that controls the TLS behavior.
+      const connectionString = stripSslQueryParams(normalizePostgresUrl(config.databaseUrl ?? ""));
       // A hosted Postgres (Supabase) requires TLS. We skip certificate
       // verification because the managed provider terminates TLS with its own CA;
       // the connection is still encrypted. A local Postgres is left plain.

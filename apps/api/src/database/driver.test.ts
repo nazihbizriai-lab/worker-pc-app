@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { createDatabaseClient, normalizePostgresUrl, toPostgresText } from "./driver.js";
+import { createDatabaseClient, normalizePostgresUrl, stripSslQueryParams, toPostgresText } from "./driver.js";
+
+describe("stripSslQueryParams", () => {
+  it("removes sslmode while keeping other params", () => {
+    expect(stripSslQueryParams("postgres://u:p@host:5432/db?sslmode=require")).toBe("postgres://u:p@host:5432/db");
+    expect(stripSslQueryParams("postgres://u:p@host/db?application_name=x&sslmode=verify-full")).toBe(
+      "postgres://u:p@host/db?application_name=x"
+    );
+  });
+
+  it("leaves a string with no query string unchanged", () => {
+    expect(stripSslQueryParams("postgres://u:p@host:5432/db")).toBe("postgres://u:p@host:5432/db");
+  });
+});
 
 describe("normalizePostgresUrl", () => {
   it("percent-encodes a password with URL-significant characters", () => {
