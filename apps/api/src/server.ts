@@ -45,6 +45,7 @@ import { getBudgetUsage, getBudgetWindow, planBudget, reserveBudget, settleBudge
 import { streamChat } from "./chat.js";
 import { config } from "./config.js";
 import {
+  client,
   createRun,
   deleteConversation,
   getConversation,
@@ -271,7 +272,7 @@ async function submit(attempt){
   if(r.ok){msg.textContent='✓ Your password is updated. Return to WorkCrew and sign in.';msg.className='ok';pw.disabled=true;go.style.display='none';return;}
   if(r.status>=500&&attempt<1){msg.textContent='Working on it...';msg.className='';return submit(attempt+1);}
   var d=await r.json().catch(function(){return {};});
-  if(r.status>=500){msg.textContent='Something went wrong on our side. Please wait a minute and try again.';}
+  if(r.status>=500){msg.textContent='Something went wrong on our side. Please wait a minute and try again.'+((d&&d.detail)?(' ['+d.detail+']'):'');}
   else{msg.textContent=(d&&d.error)||'That link is invalid or has expired. Open the app and request a new one.';}
   msg.className='err';go.disabled=false;
 }
@@ -579,9 +580,16 @@ app.setErrorHandler((error, request, reply) => {
   const code = error instanceof ZodError ? "INVALID_REQUEST" : String((error as { code?: string }).code ?? "INTERNAL_ERROR");
   if (statusCode >= 500) request.log.error({ err: error }, "Request failed");
   else request.log.info({ code, path: request.url }, "Request rejected");
+  // TEMPORARY launch diagnostic: include a short, non-sensitive description of a
+  // 5xx cause so an intermittent fault can be identified from the client. Remove
+  // once the password-reset issue is confirmed resolved.
+  const detail = statusCode >= 500 && error instanceof Error
+    ? `${(error as { code?: string }).code ? (error as { code?: string }).code + ": " : ""}${error.message}`.slice(0, 200)
+    : undefined;
   void reply.code(statusCode).send({
     error: statusCode >= 500 ? "The service could not complete the request" : error instanceof Error ? error.message : "The request was rejected",
     code,
+    detail,
     details: error instanceof ZodError ? error.issues : undefined
   });
 });
@@ -590,6 +598,15 @@ await initializeDatabase();
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   await app.listen({ port: config.port, host: config.host });
+  // Keep a connection warm so an idle pooler does not leave the first real
+  // request paying a reconnect. A light query every few minutes is enough.
+  if (config.databaseUrl) {
+    setInterval(() => {
+      void client.execute("SELECT 1").catch((error) => {
+        console.warn("[WorkCrew] keep-warm ping failed (will retry):", error instanceof Error ? error.message : error);
+      });
+    }, 4 * 60 * 1000).unref();
+  }
 }
 
 export { app };

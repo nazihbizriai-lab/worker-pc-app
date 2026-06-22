@@ -171,11 +171,11 @@ function createPostgresClient(): DatabaseClient {
           // Fail a stuck connection in ten seconds with a clear error instead of
           // hanging, so a bad URL surfaces in the logs rather than looping.
           connectionTimeoutMillis: 10_000,
-          // Close our own idle connections before the Supabase pooler does (it
-          // drops idle ones after a short while). This stops us from ever picking
-          // a connection the pooler already killed, which is the usual cause of a
-          // sporadic "Connection terminated" failure on an otherwise valid query.
-          idleTimeoutMillis: 30_000,
+          // Close our own idle connections quickly, before the Supabase pooler
+          // drops them. This stops us from ever picking a connection the pooler
+          // already killed, which is the usual cause of a sporadic "Connection
+          // terminated" failure on an otherwise valid query.
+          idleTimeoutMillis: 10_000,
           keepAlive: true,
           allowExitOnIdle: false
         });
@@ -191,16 +191,18 @@ function createPostgresClient(): DatabaseClient {
     return poolPromise;
   }
 
-  // A dropped pooled connection surfaces as one of these. The query never ran, so
-  // retrying it once on a fresh connection is safe and transparent.
+  // A dropped or unusable pooled connection surfaces as one of these. The query
+  // never reached the server, so retrying it on a fresh connection is safe.
   const isTransient = (error: unknown): boolean => {
     const code = (error as { code?: string })?.code ?? "";
     const message = error instanceof Error ? error.message : String(error ?? "");
     return (
-      ["ECONNRESET", "EPIPE", "ETIMEDOUT", "08006", "08003", "08000", "57P01", "57P02", "57P03"].includes(code) ||
-      /connection terminated|server closed the connection|connection closed|terminating connection/i.test(message)
+      ["ECONNRESET", "EPIPE", "ETIMEDOUT", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN", "08006", "08003", "08000", "08001", "08004", "57P01", "57P02", "57P03", "53300", "XX000"].includes(code) ||
+      /connection terminated|server closed the connection|connection closed|terminating connection|not queryable|connection error|connection ended|socket hang up|timeout exceeded|connect etimedout|read econnreset|too many clients/i.test(message)
     );
   };
+
+  const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
   const run = async (executor: PgClientLike, statement: DbStatement): Promise<DbResult> => {
     const { sql, args } = statementParts(statement);
@@ -212,14 +214,21 @@ function createPostgresClient(): DatabaseClient {
     dialect: "postgres",
     async execute(statement) {
       const pool = await getPool();
-      try {
-        return await run(pool, statement);
-      } catch (error) {
-        if (!isTransient(error)) throw error;
-        // The pooled connection was dead. pool.query picks a fresh one on retry.
-        console.warn("[WorkCrew] Postgres connection dropped; retrying once on a fresh connection.");
-        return run(pool, statement);
+      // Try up to three times on a transient connection fault. pool.query picks a
+      // fresh connection each attempt, so a dead pooled one is left behind. A
+      // short backoff gives the pool a moment to open a new socket.
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          return await run(pool, statement);
+        } catch (error) {
+          lastError = error;
+          if (!isTransient(error)) throw error;
+          console.warn(`[WorkCrew] Postgres connection fault (attempt ${attempt + 1}/3); retrying on a fresh connection.`);
+          await delay(150 * (attempt + 1));
+        }
       }
+      throw lastError;
     },
     async batch(statements) {
       const pool = await getPool();
@@ -246,13 +255,18 @@ function createPostgresClient(): DatabaseClient {
           client.release(failed);
         }
       };
-      try {
-        return await runBatch();
-      } catch (error) {
-        if (!isTransient(error)) throw error;
-        console.warn("[WorkCrew] Postgres connection dropped mid-transaction; retrying the batch once.");
-        return runBatch();
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          return await runBatch();
+        } catch (error) {
+          lastError = error;
+          if (!isTransient(error)) throw error;
+          console.warn(`[WorkCrew] Postgres connection fault mid-transaction (attempt ${attempt + 1}/3); retrying the batch.`);
+          await delay(150 * (attempt + 1));
+        }
       }
+      throw lastError;
     }
   };
 }

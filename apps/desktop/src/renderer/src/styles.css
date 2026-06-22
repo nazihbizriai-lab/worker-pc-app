@@ -86,11 +86,13 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 /* Auth errors read as a soft red alert, never raw developer text. */
 .notice-error { margin-top: 16px; border-color: rgba(248,113,113,.4); color: #fca5a5; background: rgba(248,113,113,.08); }
 
-/* "Check your inbox" confirmation shown after sign-up or a reset request. */
+/* "Check your inbox" confirmation shown after sign-up or a reset request. The
+   brand is a full-width centered row, and the green check sits on its own
+   centered line directly beneath it. */
 .auth-sent { text-align: center; }
-.auth-sent .brand { justify-content: center; margin-bottom: 24px; }
-.auth-check-badge { display: inline-flex; align-items: center; justify-content: center; width: 66px; height: 66px; margin: 4px 0 6px; color: #34d399; }
-.auth-check { width: 66px; height: 66px; }
+.auth-sent .brand { display: flex; justify-content: center; margin-bottom: 18px; }
+.auth-check-badge { display: flex; justify-content: center; width: 100%; margin: 4px 0 10px; color: #34d399; }
+.auth-check { width: 60px; height: 60px; }
 .auth-sent h1 { margin: 6px 0 10px; }
 .auth-sent .muted { line-height: 1.55; }
 .auth-hint { margin: 14px 0 22px; color: var(--muted); font-size: 12px; line-height: 1.5; }
@@ -210,8 +212,12 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .md a { color: var(--accent-soft); text-decoration: underline; }
 /* Routines: the schedule picker row (cadence, day, time). */
 .routine-schedule { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
-.routine-schedule select { padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: var(--panel-2); font-size: 13px; }
-.routine-schedule .colon { color: var(--muted); }
+/* Size each dropdown to its contents so the cadence and the hour : minute sit on
+   one line (for example "Every day  09 : 00"), instead of each stretching to the
+   full width and stacking. The two-class selector overrides the full-width rule
+   that applies to every select inside a save form. */
+.save-form .routine-schedule select { width: auto; min-width: 62px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: var(--panel-2); font-size: 13px; }
+.routine-schedule .colon { color: var(--muted); font-weight: 600; }
 /* Settings: read-only info rows (version, sign in mode, billing mode). Each row
    is a card with the label on the left and the value on the right, both on a
    single baseline so the line reads as balanced rather than two mismatched
