@@ -442,9 +442,24 @@ export default function App() {
         setPhase("auth");
         return;
       }
-      const state = await window.workcrew.api.entitlement();
-      setEntitlement(state);
-      setPhase(state.active ? "workspace" : "paywall");
+      try {
+        const state = await window.workcrew.api.entitlement();
+        setEntitlement(state);
+        setPhase(state.active ? "workspace" : "paywall");
+      } catch (entitlementError) {
+        // A stored session can be invalid for the current backend, for example
+        // after switching the backend address or when the token has expired. In
+        // that case drop cleanly to the sign-in screen instead of a dead-end
+        // error. Any other failure (a real outage) still shows Try again.
+        const message = errorMessage(entitlementError).toLowerCase();
+        const isAuthIssue = /session|sign in|expired|auth|401|unauthor/.test(message);
+        if (isAuthIssue) {
+          await window.workcrew.auth.signOut().catch(() => {});
+          setPhase("auth");
+          return;
+        }
+        throw entitlementError;
+      }
     } catch (error) {
       setFatal(errorMessage(error));
       setPhase("loading");
