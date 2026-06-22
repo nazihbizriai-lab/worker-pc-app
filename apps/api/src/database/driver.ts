@@ -112,6 +112,35 @@ function createLibsqlClient(): DatabaseClient {
   };
 }
 
+/**
+ * Log a safe summary of the configured DATABASE_URL so a misconfiguration is
+ * visible in the deploy log without ever printing the password. It surfaces the
+ * username (which carries the Supabase project ref), the host, and common
+ * mistakes (empty password, leftover [brackets], unreplaced placeholder, stray
+ * spaces). Diagnostics only; the password value is never logged.
+ */
+function logPostgresDiagnostics(raw: string): void {
+  const value = raw.trim();
+  const match = /^(postgres(?:ql)?:\/\/)([^:@/]+):([\s\S]*)@([^@/]+)(\/.*)?$/.exec(value);
+  if (!match) {
+    console.info("[WorkCrew] DATABASE_URL is set but does not look like a Postgres URL (check it begins with postgresql:// and has user:password@host).");
+    return;
+  }
+  const user = match[2] ?? "";
+  const password = match[3] ?? "";
+  const host = match[4] ?? "";
+  const issues: string[] = [];
+  if (password.length === 0) issues.push("password is EMPTY");
+  if (/[[\]]/.test(password)) issues.push("password still contains [ or ] brackets");
+  if (password.includes("YOUR-PASSWORD")) issues.push("the [YOUR-PASSWORD] placeholder was not replaced");
+  if (/\s/.test(value)) issues.push("the value contains a space");
+  if (!host.includes("pooler.supabase.com")) issues.push("host is not the Supabase pooler (use the Session pooler string)");
+  console.info(
+    `[WorkCrew] Postgres target: user=${user} host=${host} passwordChars=${password.length}` +
+      (issues.length ? ` ISSUES: ${issues.join("; ")}` : " (structure looks OK; if auth still fails the password value does not match this project)")
+  );
+}
+
 function createPostgresClient(): DatabaseClient {
   // The pool is created lazily on first use so the SQLite path never loads the
   // pg driver, and so importing this module has no side effects.
@@ -121,6 +150,7 @@ function createPostgresClient(): DatabaseClient {
       // A specifier typed as a plain string keeps TypeScript from resolving pg's
       // type declarations at build time; Node resolves the package at runtime.
       const specifier: string = "pg";
+      logPostgresDiagnostics(config.databaseUrl ?? "");
       // Normalize the password, then strip any SSL query params so the explicit
       // ssl option below is the only thing that controls the TLS behavior.
       const connectionString = stripSslQueryParams(normalizePostgresUrl(config.databaseUrl ?? ""));
