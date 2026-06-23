@@ -19,6 +19,7 @@ import { PermissionsPanel } from "./components/PermissionsPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { AccountDialog } from "./components/AccountDialog";
 import { InviteDialog } from "./components/InviteDialog";
+import { RecorderDialog } from "./components/RecorderDialog";
 import { ApprovalModal } from "./components/ApprovalModal";
 import { useAutomationRunner } from "./hooks/useAutomationRunner";
 import {
@@ -339,6 +340,7 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
   const [view, setView] = useState<PanelView>("chat");
   const [accountOpen, setAccountOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [recorderOpen, setRecorderOpen] = useState(false);
   const [permissions, setPermissions] = useState<PermissionState>(() => loadPermissions());
   const [routines, setRoutines] = useState<Routine[]>(() => loadRoutines());
   const [recents, setRecents] = useState<ConversationSummary[]>([]);
@@ -637,6 +639,7 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
           onSend={send}
           onStop={chat.stop}
           onAutomate={startAutomation}
+          onRecord={() => setRecorderOpen(true)}
         />
         <footer>WorkCrew can make mistakes. Check important details.</footer>
       </section>
@@ -671,6 +674,12 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
         />
       )}
       {inviteOpen && <InviteDialog onClose={() => setInviteOpen(false)} />}
+      {recorderOpen && (
+        <RecorderDialog
+          onClose={() => setRecorderOpen(false)}
+          onSaved={() => setRoutines(loadRoutines())}
+        />
+      )}
     </main>
   );
 }
