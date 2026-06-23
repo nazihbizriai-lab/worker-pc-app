@@ -270,5 +270,97 @@ class ExecuteActionTests(unittest.TestCase):
             agent.execute_action({"kind": "windows", "command": "totally-unknown"})
 
 
+class BuildInspectTests(unittest.TestCase):
+    def test_keeps_only_interactable_named_controls(self):
+        infos = [
+            {"name": "Save", "auto_id": "btnSave", "control_type": "Button"},
+            {"name": "", "auto_id": "", "control_type": "Pane"},          # decoration
+            {"name": "Label", "auto_id": "", "control_type": "Text"},      # not interactable
+            {"name": "", "auto_id": "sep1", "control_type": "Separator"},  # not interactable
+            {"name": "Customer", "auto_id": "cmbCust", "control_type": "ComboBox"},
+            {"name": "", "auto_id": "", "control_type": "Button"},         # interactable type but anonymous
+        ]
+        text, elements = agent.build_inspect(infos)
+        lines = text.splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0], '1 Button "Save"')
+        self.assertEqual(lines[1], '2 ComboBox "Customer"')
+        self.assertEqual(elements["1"], {"auto_id": "btnSave", "title": "Save", "control_type": "Button"})
+        self.assertEqual(elements["2"]["auto_id"], "cmbCust")
+
+    def test_numbers_are_sequential_and_stringified(self):
+        infos = [{"name": f"B{i}", "auto_id": f"b{i}", "control_type": "Button"} for i in range(5)]
+        text, elements = agent.build_inspect(infos)
+        self.assertEqual(list(elements.keys()), ["1", "2", "3", "4", "5"])
+
+    def test_caps_at_max_controls(self):
+        infos = [{"name": f"B{i}", "auto_id": f"b{i}", "control_type": "Button"} for i in range(agent.MAX_INSPECT_CONTROLS + 50)]
+        text, elements = agent.build_inspect(infos)
+        self.assertEqual(len(elements), agent.MAX_INSPECT_CONTROLS)
+
+    def test_falls_back_to_auto_id_label_when_unnamed(self):
+        infos = [{"name": "", "auto_id": "txtDate", "control_type": "Edit"}]
+        text, _ = agent.build_inspect(infos)
+        self.assertEqual(text, '1 Edit "txtDate"')
+
+    def test_empty_when_nothing_interactable(self):
+        infos = [{"name": "", "auto_id": "", "control_type": "Pane"}]
+        text, elements = agent.build_inspect(infos)
+        self.assertEqual(elements, {})
+        self.assertIn("no interactable controls", text)
+
+
+# A fake window/control pair so find_control can be exercised without pywinauto.
+class _FakeControl:
+    def exists(self, timeout=0):
+        return True
+
+    def wait(self, *args, **kwargs):
+        return self
+
+
+class _FakeWindow:
+    def __init__(self):
+        self.criteria_calls = []
+
+    def child_window(self, **criteria):
+        self.criteria_calls.append(criteria)
+        return _FakeControl()
+
+
+class FindControlTests(unittest.TestCase):
+    def setUp(self):
+        self._original_window = agent.STATE.window
+        self._original_elements = agent.STATE.elements
+        self.window = _FakeWindow()
+        agent.STATE.window = self.window
+
+    def tearDown(self):
+        agent.STATE.window = self._original_window
+        agent.STATE.elements = self._original_elements
+
+    def test_numeric_selector_resolves_via_stored_auto_id(self):
+        agent.STATE.elements = {"12": {"auto_id": "btnSave", "title": "Save", "control_type": "Button"}}
+        agent.find_control("12")
+        # The most specific stored criterion (auto_id) is tried first.
+        self.assertEqual(self.window.criteria_calls[0], {"auto_id": "btnSave"})
+
+    def test_numeric_selector_without_auto_id_uses_title_and_type(self):
+        agent.STATE.elements = {"3": {"auto_id": "", "title": "Save", "control_type": "Button"}}
+        agent.find_control("3")
+        self.assertEqual(self.window.criteria_calls[0], {"title": "Save", "control_type": "Button"})
+
+    def test_unknown_numeric_selector_treated_as_literal(self):
+        agent.STATE.elements = {}
+        agent.find_control("99")
+        # No stored element, so it falls through to the literal candidate order.
+        self.assertEqual(self.window.criteria_calls[0], {"auto_id": "99"})
+
+    def test_named_selector_uses_literal_candidates(self):
+        agent.STATE.elements = {"1": {"auto_id": "btnSave", "title": "Save", "control_type": "Button"}}
+        agent.find_control("Save & Close")
+        self.assertEqual(self.window.criteria_calls[0], {"auto_id": "Save & Close"})
+
+
 if __name__ == "__main__":
     unittest.main()
