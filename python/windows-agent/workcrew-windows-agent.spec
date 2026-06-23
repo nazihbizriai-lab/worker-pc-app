@@ -22,6 +22,8 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    console=False,
+    upx=False,
+    # Console build so the startup port handshake on stdout works when the
+    # desktop launches the helper with the window hidden (windowsHide: true).
+    console=True,
 )
