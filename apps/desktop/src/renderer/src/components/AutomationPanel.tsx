@@ -8,7 +8,7 @@ import { PanelShell } from "./PanelShell";
 // before any change. The runner and its approval modal live in the workspace so
 // a scheduled routine and a typed task share one engine.
 
-export function AutomationPanel({ runner, model, onClose, initialTask = "", onSaveRoutine }: { runner: AutomationRunner; model: ModelTier; onClose: () => void; initialTask?: string; onSaveRoutine?: (task: string) => void }) {
+export function AutomationPanel({ runner, model, onClose, initialTask = "", onSaveRoutine, alwaysAllow = false, onAlwaysAllowChange }: { runner: AutomationRunner; model: ModelTier; onClose: () => void; initialTask?: string; onSaveRoutine?: (task: string) => void; alwaysAllow?: boolean; onAlwaysAllowChange?: (value: boolean) => void }) {
   // Seeded from an example prompt the user clicked on the home screen, if any.
   const [task, setTask] = useState(initialTask);
   const [connecting, setConnecting] = useState(false);
@@ -66,6 +66,23 @@ export function AutomationPanel({ runner, model, onClose, initialTask = "", onSa
           The first time, use Connect browser and sign in to your accounts in the window that opens. WorkCrew asks before
           any change and never enters passwords or payment details for you.
         </p>
+        {onAlwaysAllowChange && (
+          <label className="always-allow">
+            <span className={`switch ${alwaysAllow ? "switch-on" : ""}`} aria-hidden="true">
+              <input
+                type="checkbox"
+                checked={alwaysAllow}
+                onChange={(event) => onAlwaysAllowChange(event.target.checked)}
+                aria-label="Always allow"
+              />
+              <span className="switch-knob" />
+            </span>
+            <span className="always-allow-text">
+              <strong>Always allow</strong>
+              <small>Run actions without asking each time. <a href="https://getworkcrew.com/safety" target="_blank" rel="noreferrer">See best practices for safe use</a></small>
+            </span>
+          </label>
+        )}
         {connectNote && <p className="notice">{connectNote}</p>}
         {connectError && <p className="error-banner inline">{connectError}</p>}
         {runner.error && <p className="error-banner inline">{runner.error}</p>}

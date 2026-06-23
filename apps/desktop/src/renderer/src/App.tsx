@@ -105,7 +105,7 @@ function LogoMark() {
       <defs>
         <linearGradient id="wc-grad" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stopColor="#a78bfa" />
-          <stop offset="0.55" stopColor="#8b5cf6" />
+          <stop offset="0.55" stopColor="#7c3aed" />
           <stop offset="1" stopColor="#5b21b6" />
         </linearGradient>
         <mask id="wc-plus">
@@ -314,6 +314,14 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
   const [routineSeed, setRoutineSeed] = useState("");
   // Auto-update status, surfaced as a sidebar button when an update is ready.
   const [update, setUpdate] = useState<{ state: string; version?: string; percent?: number } | null>(null);
+  // "Always allow": when on, automations run without asking for each write action.
+  const [alwaysAllow, setAlwaysAllowState] = useState<boolean>(() => {
+    try { return localStorage.getItem("workcrew.alwaysAllow") === "1"; } catch { return false; }
+  });
+  function setAlwaysAllow(value: boolean) {
+    setAlwaysAllowState(value);
+    try { localStorage.setItem("workcrew.alwaysAllow", value ? "1" : "0"); } catch { /* storage unavailable */ }
+  }
 
   const chat = useChatStream();
   const runner = useAutomationRunner();
@@ -366,6 +374,12 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
     void window.workcrew.updates.check();
     return off;
   }, []);
+
+  // Keep the runner's auto-approve in sync with the persisted setting.
+  useEffect(() => {
+    runner.setAutoApprove(alwaysAllow);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alwaysAllow]);
 
   // Refresh Recents after a conversation finishes its first turn so a brand new
   // chat appears in the sidebar.
@@ -439,6 +453,9 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
   }
 
   const planLabel = entitlement.plan ? PLAN_CATALOG[entitlement.plan].name : "No plan";
+  // The header shows the current conversation's auto-generated title, and stays
+  // empty on a new chat (no duplicate brand logo).
+  const chatTitle = conversationId ? (recents.find((item) => item.id === conversationId)?.title ?? "") : "";
 
   // The always-visible update control at the bottom of the sidebar. It shows
   // "Check for updates" normally, the progress while downloading, and a clickable
@@ -465,7 +482,7 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
       <aside className="sidebar">
         <Brand compact />
         <button className="new-chat" onClick={startNewChat} aria-label="New chat">
-          <span className="new-chat-spark"><LogoMark /></span> New chat
+          <span className="new-chat-plus" aria-hidden="true">+</span> New chat
         </button>
         <nav aria-label="Workspace sections">
           <button
@@ -544,7 +561,7 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
       </aside>
       <section className="workspace">
         <header className="workspace-header">
-          <Brand compact />
+          <h1 className="workspace-title" title={chatTitle}>{chatTitle}</h1>
           <div className="header-right">
             {!isUltra && (
               <button className="upgrade-pill" onClick={handleUpgrade} disabled={upgrading}>
@@ -577,12 +594,19 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
           onChange={setPermissions}
         />
       )}
-      {view === "automation" && <AutomationPanel runner={runner} model={model} initialTask={automationSeed} onSaveRoutine={saveAsRoutine} onClose={() => setView("chat")} />}
+      {view === "automation" && <AutomationPanel runner={runner} model={model} initialTask={automationSeed} onSaveRoutine={saveAsRoutine} alwaysAllow={alwaysAllow} onAlwaysAllowChange={setAlwaysAllow} onClose={() => setView("chat")} />}
       {view === "routines" && (
         <RoutinesPanel runner={runner} model={model} routines={routines} initialTask={routineSeed} onChange={setRoutines} onClose={() => setView("chat")} />
       )}
       {view === "settings" && <SettingsPanel info={info} onClose={() => setView("chat")} />}
-      {runner.pending && <ApprovalModal action={runner.pending.action} label={runner.pending.label} onDecide={runner.decide} />}
+      {runner.pending && (
+        <ApprovalModal
+          action={runner.pending.action}
+          label={runner.pending.label}
+          onDecide={runner.decide}
+          onAllowAlways={() => { setAlwaysAllow(true); runner.setAutoApprove(true); runner.decide(true); }}
+        />
+      )}
       {accountOpen && (
         <AccountDialog
           entitlement={entitlement}

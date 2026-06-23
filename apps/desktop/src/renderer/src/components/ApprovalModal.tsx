@@ -8,11 +8,13 @@ import type { AutomationAction } from "@workcrew/contracts";
 export function ApprovalModal({
   action,
   label,
-  onDecide
+  onDecide,
+  onAllowAlways
 }: {
   action: AutomationAction;
   label: string;
   onDecide: (approved: boolean) => void;
+  onAllowAlways: () => void;
 }) {
   const allowRef = useRef<HTMLButtonElement>(null);
 
@@ -59,6 +61,13 @@ export function ApprovalModal({
             Allow once
           </button>
         </div>
+        <button className="modal-allow-always" onClick={onAllowAlways}>
+          Allow always
+        </button>
+        <p className="modal-safe-note">
+          Always allow lets WorkCrew act without asking each time.{" "}
+          <a href="https://getworkcrew.com/safety" target="_blank" rel="noreferrer">See best practices for safe use</a>
+        </p>
       </section>
     </div>
   );

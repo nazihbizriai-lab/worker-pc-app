@@ -31,6 +31,7 @@ export type AutomationRunner = {
   run: (task: string, model: ModelTier, label?: string) => Promise<void>;
   decide: (approved: boolean) => void;
   stop: () => void;
+  setAutoApprove: (value: boolean) => void;
 };
 
 export function useAutomationRunner(): AutomationRunner {
@@ -43,6 +44,11 @@ export function useAutomationRunner(): AutomationRunner {
 
   const stoppedRef = useRef(false);
   const approvalResolve = useRef<((approved: boolean) => void) | null>(null);
+  // When on, write actions run without prompting ("Always allow").
+  const autoApproveRef = useRef(false);
+  function setAutoApprove(value: boolean): void {
+    autoApproveRef.current = value;
+  }
 
   function requestApproval(action: AutomationAction): Promise<boolean> {
     return new Promise((resolve) => {
@@ -100,7 +106,7 @@ export function useAutomationRunner(): AutomationRunner {
         const id = stepId();
         setSteps((current) => [...current, { id, label: actionLabel(action), detail: actionDetail(action), status: "running" }]);
 
-        if (actionNeedsApproval(action)) {
+        if (actionNeedsApproval(action) && !autoApproveRef.current) {
           const approved = await requestApproval(action);
           if (!approved) {
             setSteps((current) => current.map((item) => (item.id === id ? { ...item, status: "declined" } : item)));
@@ -135,5 +141,5 @@ export function useAutomationRunner(): AutomationRunner {
     }
   }
 
-  return { steps, status, summary, error, label, pending, run, decide, stop, running: status === "running" };
+  return { steps, status, summary, error, label, pending, run, decide, stop, setAutoApprove, running: status === "running" };
 }

@@ -152,6 +152,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .workspace::before { content: ""; position: absolute; inset: 72px 0 35px; pointer-events: none; opacity: .05; background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 30px 30px; mask-image: linear-gradient(to bottom, transparent, #000 25%, #000 75%, transparent); }
 .workspace-header { position: relative; z-index: 1; min-height: 66px; display: flex; align-items: center; justify-content: space-between; padding: 12px 25px; border-bottom: 1px solid var(--line); }
 .workspace-header > .brand { opacity: .88; }
+.workspace-title { margin: 0; min-width: 0; font-size: 15px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .header-right { display: flex; align-items: center; gap: 14px; }
 .upgrade-pill { padding: 7px 14px; border: 0; border-radius: 99px; cursor: pointer; font-size: 12px; font-weight: 700; color: var(--accent-ink); background: var(--accent); }
 .upgrade-pill:hover { background: var(--accent-soft); }
@@ -306,6 +307,7 @@ select option:checked { background-color: var(--panel-2); }
 .new-chat { display: flex; align-items: center; gap: 10px; width: 100%; margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; text-align: left; color: var(--text); background: var(--panel-2); font-size: var(--fs-ui); font-weight: 650; }
 .new-chat:hover { border-color: var(--accent); }
 .new-chat-spark { width: 20px; height: 20px; flex: none; display: grid; place-items: center; }
+.new-chat-plus { width: 22px; height: 22px; flex: none; display: grid; place-items: center; border-radius: 7px; background: var(--panel); color: var(--accent-soft); font-size: 17px; font-weight: 700; line-height: 1; }
 .recents { display: flex; flex-direction: column; min-height: 0; flex: 1; margin-top: 14px; overflow: hidden; }
 .recents-title { padding: 0 4px 8px; color: var(--muted); font-size: var(--fs-eyebrow); font-weight: 700; letter-spacing: .6px; }
 .recents-empty { margin: 0; padding: 0 4px; color: #6b6359; font-size: var(--fs-small); line-height: 1.5; }
@@ -412,6 +414,21 @@ select option:checked { background-color: var(--panel-2); }
 .modal-action code { display: block; margin-top: 8px; color: #9aa3b0; font: 11px/1.5 Consolas, monospace; overflow-wrap: anywhere; }
 .modal-buttons { display: flex; gap: 10px; margin-top: 20px; }
 .modal-buttons button { flex: 1; }
+.modal-allow-always { width: 100%; margin-top: 10px; padding: 11px; border: 1px solid #463a6e; border-radius: 9px; cursor: pointer; color: var(--accent-soft); background: transparent; font-size: 13px; font-weight: 650; }
+.modal-allow-always:hover { border-color: var(--accent); color: var(--text); background: rgba(139,92,246,.1); }
+.modal-safe-note { margin: 12px 0 0; text-align: center; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.modal-safe-note a, .always-allow-text a { color: var(--accent-soft); }
+.modal-safe-note a:hover, .always-allow-text a:hover { color: var(--text); }
+
+/* Always-allow toggle in the Automation panel. */
+.always-allow { display: flex; align-items: flex-start; gap: 11px; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel-2); cursor: pointer; }
+.always-allow-text strong { display: block; font-size: 13px; }
+.always-allow-text small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.switch { position: relative; flex: none; width: 38px; height: 22px; margin-top: 1px; border-radius: 99px; background: #3a3836; transition: background .15s; }
+.switch-on { background: var(--accent); }
+.switch input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.switch-knob { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
+.switch-on .switch-knob { transform: translateX(16px); }
 
 .account-modal { width: min(420px, 100%); }
 .account-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }

@@ -9,7 +9,7 @@
 function brandMark(size: number): string {
   return `<svg width="${size}" height="${size}" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="display:block;flex:0 0 auto">
 <defs>
-<linearGradient id="bmMark" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a78bfa"/><stop offset="0.55" stop-color="#8b5cf6"/><stop offset="1" stop-color="#5b21b6"/></linearGradient>
+<linearGradient id="bmMark" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a78bfa"/><stop offset="0.55" stop-color="#7c3aed"/><stop offset="1" stop-color="#5b21b6"/></linearGradient>
 <mask id="bmPlus"><rect width="512" height="512" fill="white"/><rect x="222" y="150" width="68" height="212" rx="34" fill="black"/><rect x="150" y="222" width="212" height="68" rx="34" fill="black"/></mask>
 </defs>
 <g mask="url(#bmPlus)" fill="url(#bmMark)" transform="translate(256 256) scale(2.05) translate(-50 -50)">
