@@ -6,12 +6,15 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import {
   PLAN_CATALOG,
+  REFERRAL_BONUS_MICRODOLLARS,
+  REFERRAL_LINK_BASE,
   attachmentUploadSchema,
   chatSendSchema,
   createCheckoutSchema,
   createRunSchema,
   nextRunStepSchema,
   type ConversationSummary,
+  type ReferralInfo,
   type RunStepResponse,
   type SubscriptionState
 } from "@workcrew/contracts";
@@ -46,12 +49,16 @@ import { streamChat } from "./chat.js";
 import { config } from "./config.js";
 import {
   client,
+  countReferrals,
   createRun,
+  creditReferrer,
   deleteConversation,
+  ensureReferralCode,
   getConversation,
   getMessages,
   getRun,
   getSubscription,
+  getUserById,
   initializeDatabase,
   listConversations,
   updateRun,
@@ -138,7 +145,7 @@ async function subscriptionState(userId: string): Promise<SubscriptionState> {
     currentPeriodEnd: new Date(subscription.currentPeriodEndMs).toISOString(),
     budgetPeriodStart: new Date(window.startMs).toISOString(),
     budgetPeriodEnd: new Date(window.endMs).toISOString(),
-    budgetMicrodollars: planBudget(subscription.plan),
+    budgetMicrodollars: planBudget(subscription.plan) + (subscription.referralBonusMicrodollars ?? 0),
     usedMicrodollars: usage.used,
     reservedMicrodollars: usage.reserved
   };
@@ -201,7 +208,7 @@ const authLimit = (max: number) => ({ config: { rateLimit: { max, timeWindow: "1
 
 app.post("/v1/auth/sign-up", authLimit(8), async (request) => {
   const body = signUpInputSchema.parse(request.body);
-  return localAuthProvider.signUp(body.email, body.password);
+  return localAuthProvider.signUp(body.email, body.password, body.referralCode);
 });
 
 app.post("/v1/auth/sign-in", authLimit(10), async (request) => {
@@ -297,6 +304,24 @@ go.onclick=async function(){
 
 app.get("/v1/entitlement", async (request) => subscriptionState(await authenticate(request)));
 
+// A signed-in user's referral standing: their code, a shareable link, how many
+// people they have invited, how many have paid, and the bonus earned so far.
+// Available to any signed-in user (even before they subscribe) so they can start
+// inviting; a legacy account without a code is assigned one on first read.
+app.get("/v1/referral", async (request): Promise<ReferralInfo> => {
+  const userId = await authenticate(request);
+  const code = await ensureReferralCode(userId);
+  const stats = await countReferrals(code);
+  const user = await getUserById(userId);
+  return {
+    code,
+    link: `${REFERRAL_LINK_BASE}/?ref=${code}`,
+    invitedCount: stats.invited,
+    creditedCount: stats.credited,
+    bonusMicrodollars: user?.referralBonusMicrodollars ?? 0
+  };
+});
+
 // Simulated checkout. Requires authentication, is allowed only when the
 // simulated billing mode is selected, and never in production. It writes an
 // active, Stripe-shaped entitlement through the same upsert path the real
@@ -308,6 +333,8 @@ app.post("/v1/billing/simulate", async (request) => {
   }
   const body = createCheckoutSchema.parse(request.body);
   await simulatedBillingProvider.activate(userId, body.plan, body.interval);
+  // First paid activation credits the inviter who referred this user (idempotent).
+  await creditReferrer(userId, REFERRAL_BONUS_MICRODOLLARS);
   return subscriptionState(userId);
 });
 
@@ -351,7 +378,11 @@ app.post("/v1/runs", async (request) => {
     pendingToolUseId: null,
     stepCount: 0,
     lastActionSignature: null,
-    repeatCount: 0
+    repeatCount: 0,
+    tokensInput: 0,
+    tokensCacheRead: 0,
+    tokensCacheWrite: 0,
+    tokensOutput: 0
   });
   return { runId: id, status: "ready" };
 });
@@ -419,6 +450,32 @@ app.post<{ Params: { runId: string } }>("/v1/runs/:runId/next", async (request):
     await settleBudget(reservation.reservationId, actualCost, result.providerRequestId);
     run.messages.push({ role: "assistant", content: result.content });
 
+    // Token instrumentation. Accumulate the raw token categories on the run and
+    // log this step plus the running total, so prompt-cache effectiveness
+    // (cacheRead growing while input stays small) and per-run usage are visible
+    // without re-deriving them from the cost ledger.
+    run.tokensInput += result.usage.input_tokens;
+    run.tokensCacheRead += result.usage.cache_read_input_tokens;
+    run.tokensCacheWrite += result.usage.cache_creation_input_tokens;
+    run.tokensOutput += result.usage.output_tokens;
+    request.log.info({
+      runId: run.id,
+      step: run.stepCount,
+      tier,
+      stepTokens: {
+        input: result.usage.input_tokens,
+        cacheRead: result.usage.cache_read_input_tokens,
+        cacheWrite: result.usage.cache_creation_input_tokens,
+        output: result.usage.output_tokens
+      },
+      runTokens: {
+        input: run.tokensInput,
+        cacheRead: run.tokensCacheRead,
+        cacheWrite: run.tokensCacheWrite,
+        output: run.tokensOutput
+      }
+    }, "automation step token usage");
+
     // Loop protection. A finish action ends the run and is never a loop. For
     // any other action, compare its normalized signature with the previous one
     // and stop the run when the same action repeats too many times in a row
@@ -448,6 +505,18 @@ app.post<{ Params: { runId: string } }>("/v1/runs/:runId/next", async (request):
 
     run.pendingToolUseId = result.action.kind === "finish" ? null : result.toolUseId ?? null;
     run.status = result.action.kind === "finish" ? "complete" : "awaiting_tool";
+    if (run.status === "complete") {
+      request.log.info({
+        runId: run.id,
+        steps: run.stepCount,
+        runTokens: {
+          input: run.tokensInput,
+          cacheRead: run.tokensCacheRead,
+          cacheWrite: run.tokensCacheWrite,
+          output: run.tokensOutput
+        }
+      }, "automation run complete: total token usage");
+    }
     await updateRun(run);
     return {
       runId: run.id,

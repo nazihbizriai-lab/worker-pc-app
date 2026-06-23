@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   PLAN_CATALOG,
+  REFERRAL_BONUS_MICRODOLLARS,
   type AttachmentRef,
   type BillingInterval,
   type ConversationSummary,
@@ -17,6 +18,7 @@ import { RoutinesPanel } from "./components/RoutinesPanel";
 import { PermissionsPanel } from "./components/PermissionsPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { AccountDialog } from "./components/AccountDialog";
+import { InviteDialog } from "./components/InviteDialog";
 import { ApprovalModal } from "./components/ApprovalModal";
 import { useAutomationRunner } from "./hooks/useAutomationRunner";
 import {
@@ -151,6 +153,8 @@ function AuthScreen({ onReady }: { onReady: () => Promise<void> }) {
   const [sent, setSent] = useState<null | "verify" | "reset">(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [referralCode, setReferralCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -163,7 +167,7 @@ function AuthScreen({ onReady }: { onReady: () => Promise<void> }) {
         await window.workcrew.auth.reset(email);
         setSent("reset");
       } else if (mode === "signup") {
-        const result = await window.workcrew.auth.signUp(email, password) as { needsVerification?: boolean };
+        const result = await window.workcrew.auth.signUp(email, password, referralCode.trim() || undefined) as { needsVerification?: boolean };
         // Show the inbox confirmation. The email and password stay in state so
         // that after verifying, "Back to sign in" lets the user sign in at once.
         if (result.needsVerification) setSent("verify");
@@ -213,7 +217,39 @@ function AuthScreen({ onReady }: { onReady: () => Promise<void> }) {
         <p className="muted">Your work stays under your control. WorkCrew acts only with the permissions you grant.</p>
         <form onSubmit={submit}>
           <label>Email address<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required /></label>
-          {mode !== "reset" && <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "signup" ? "new-password" : "current-password"} minLength={10} required /></label>}
+          {mode !== "reset" && (
+            <label>Password
+              <div className="password-field">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                  minLength={10}
+                  required
+                />
+                <button
+                  type="button"
+                  className="password-eye"
+                  onClick={() => setShowPassword((shown) => !shown)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
+                  title={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? (
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20C5 20 1 12 1 12a21.6 21.6 0 0 1 5.06-6.94M9.9 4.24A11 11 0 0 1 12 4c7 0 11 8 11 8a21.8 21.8 0 0 1-3.16 4.19M1 1l22 22" /><path d="M9.5 9.5a3 3 0 0 0 4.2 4.2" /></svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
+                  )}
+                </button>
+              </div>
+            </label>
+          )}
+          {mode === "signup" && (
+            <label>Referral code (optional)
+              <input type="text" value={referralCode} onChange={(event) => setReferralCode(event.target.value)} autoComplete="off" maxLength={40} placeholder="Enter a friend's invite code" />
+            </label>
+          )}
           <button className="primary full" disabled={busy}>{busy ? "Please wait" : mode === "signin" ? "Sign in" : mode === "signup" ? "Create account" : "Send reset link"}</button>
         </form>
         {notice && <p className="notice notice-error" role="alert">{notice}</p>}
@@ -295,13 +331,14 @@ function Paywall({ info, onActivated }: { info: AppInfo; onActivated: (state: Su
   );
 }
 
-function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo; entitlement: SubscriptionState; onSignOut: () => Promise<void>; onUpgrade: () => Promise<void> }) {
+function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { info: AppInfo; entitlement: SubscriptionState; onSignOut: () => Promise<void>; onUpgrade: () => Promise<void>; onAdjustPlan: (plan: PlanId, interval: BillingInterval) => Promise<void> }) {
   const [model, setModel] = useState<ModelTier>(DEFAULT_CHAT_MODEL);
   const [upgrading, setUpgrading] = useState(false);
   const [upgradeError, setUpgradeError] = useState("");
   const isUltra = entitlement.plan === "ultra";
   const [view, setView] = useState<PanelView>("chat");
   const [accountOpen, setAccountOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [permissions, setPermissions] = useState<PermissionState>(() => loadPermissions());
   const [routines, setRoutines] = useState<Routine[]>(() => loadRoutines());
   const [recents, setRecents] = useState<ConversationSummary[]>([]);
@@ -547,6 +584,18 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
             </span>
           </button>
         )}
+        <button className="invite-button" onClick={() => setInviteOpen(true)} aria-label="Invite a friend and earn tokens">
+          <span className="invite-gift" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 12 20 22 4 22 4 12" />
+              <rect x="2" y="7" width="20" height="5" />
+              <line x1="12" y1="22" x2="12" y2="7" />
+              <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" />
+              <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" />
+            </svg>
+          </span>
+          <span><strong>Invite & earn</strong><small>Get {formatTokens(REFERRAL_BONUS_MICRODOLLARS)} tokens per friend</small></span>
+        </button>
         <button
           className={`update-pill ${updateReady ? "update-ready" : ""}`}
           onClick={handleUpdateClick}
@@ -618,8 +667,10 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
           usedMicrodollars={usage}
           onClose={() => setAccountOpen(false)}
           onSignOut={onSignOut}
+          onAdjustPlan={onAdjustPlan}
         />
       )}
+      {inviteOpen && <InviteDialog onClose={() => setInviteOpen(false)} />}
     </main>
   );
 }
@@ -693,6 +744,16 @@ export default function App() {
           setEntitlement(await window.workcrew.api.changePlan("ultra", "year"));
         } else {
           await window.workcrew.api.checkout("ultra", "year");
+        }
+      }}
+      onAdjustPlan={async (plan, interval) => {
+        // The account dialog only opens for an active subscriber, so this either
+        // switches the live Stripe plan in place (with proration) or, in test
+        // mode, re-activates at the chosen plan. It never cancels.
+        if (info.billingMode === "simulated") {
+          setEntitlement(await window.workcrew.api.simulateCheckout(plan, interval));
+        } else {
+          setEntitlement(await window.workcrew.api.changePlan(plan, interval));
         }
       }}
     />

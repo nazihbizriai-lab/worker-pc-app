@@ -34,11 +34,45 @@ ALLOWED_COMMANDS = {
     "screenshot",
 }
 
+# Control types the model can actually act on. inspect returns only these, which
+# drops decorative and layout nodes (panes, groups, separators, images, plain
+# static text) that a full UI Automation tree dump is mostly made of. Sending
+# only interactable controls is the single biggest per-snapshot token saving and
+# also makes the snapshot easier for the model to reason about.
+INTERACTABLE_CONTROL_TYPES = frozenset({
+    "Button",
+    "CheckBox",
+    "ComboBox",
+    "Edit",
+    "Document",
+    "Hyperlink",
+    "ListItem",
+    "MenuItem",
+    "RadioButton",
+    "TabItem",
+    "TreeItem",
+    "Slider",
+    "Spinner",
+    "SplitButton",
+    "DataItem",
+    "HeaderItem",
+    "Custom",
+})
+
+# Most interactable controls the model needs in one window. Bounds the snapshot
+# size; the rare window with more controls is still navigable because the model
+# can act on what it sees and re-inspect after the view changes.
+MAX_INSPECT_CONTROLS = 200
+
 
 class AgentState:
     def __init__(self) -> None:
         self.application: Any = None
         self.window: Any = None
+        # Maps the short numeric id shown in the last inspect output to the
+        # concrete selector criteria for that control, so a later "click 12"
+        # resolves to the real element. Reset whenever the window changes.
+        self.elements: dict[str, dict[str, str]] = {}
         self.lock = threading.RLock()
 
 
@@ -120,6 +154,8 @@ def connect_window(title: str) -> str:
         window.wait("exists visible ready", timeout=10)
         STATE.application = application
         STATE.window = window
+        # A new window invalidates any numbered controls from a prior inspect.
+        STATE.elements = {}
     return f"Connected to {title}"
 
 
@@ -136,12 +172,28 @@ def find_control(selector: str) -> Any:
     # plain text supplied by the caller, never code, so no candidate can do more
     # than name a control to locate.
     window = require_window()
-    candidates = [
-        {"auto_id": selector},
-        {"title": selector},
-        {"control_type": selector},
-        {"best_match": selector},
-    ]
+    # A numeric selector refers to a control numbered in the last inspect. Resolve
+    # it to the concrete criteria recorded then, most specific first. Any other
+    # selector is treated as a literal name/auto_id/type, so the model can still
+    # reference controls by name and older callers keep working.
+    stored = STATE.elements.get(selector) if selector.isdigit() else None
+    if stored is not None:
+        candidates = []
+        if stored.get("auto_id"):
+            candidates.append({"auto_id": stored["auto_id"]})
+        if stored.get("title") and stored.get("control_type"):
+            candidates.append({"title": stored["title"], "control_type": stored["control_type"]})
+        if stored.get("title"):
+            candidates.append({"title": stored["title"]})
+        if not candidates:
+            candidates = [{"best_match": selector}]
+    else:
+        candidates = [
+            {"auto_id": selector},
+            {"title": selector},
+            {"control_type": selector},
+            {"best_match": selector},
+        ]
     for criteria in candidates:
         try:
             control = window.child_window(**criteria)
@@ -156,13 +208,47 @@ def find_control(selector: str) -> Any:
     raise ValueError("Control not found")
 
 
+def build_inspect(infos: list[dict[str, str]]) -> tuple[str, dict[str, dict[str, str]]]:
+    """Turn raw control descriptions into the compact, numbered snapshot the model
+    sees, plus the id->selector map used to resolve a later action.
+
+    Pure and side-effect free so it can be unit tested without pywinauto. Each
+    kept control becomes one line like ``12 Button "Save & Close"``; decorative
+    and unnamed nodes are dropped. The returned map lets find_control turn the
+    number back into auto_id/title criteria.
+    """
+    elements: dict[str, dict[str, str]] = {}
+    lines: list[str] = []
+    next_id = 1
+    for info in infos:
+        control_type = (info.get("control_type") or "").strip()
+        name = (info.get("name") or "").strip()
+        auto_id = (info.get("auto_id") or "").strip()
+        if control_type not in INTERACTABLE_CONTROL_TYPES:
+            continue
+        # A genuinely actionable control almost always has a name or an
+        # automation id; requiring one filters out anonymous filler that shares
+        # an interactable type (blank custom panes, unlabeled list rows).
+        if not name and not auto_id:
+            continue
+        identifier = str(next_id)
+        elements[identifier] = {"auto_id": auto_id, "title": name, "control_type": control_type}
+        label = name or auto_id
+        lines.append(f'{identifier} {control_type} "{label[:200]}"')
+        next_id += 1
+        if next_id > MAX_INSPECT_CONTROLS:
+            break
+    text = "\n".join(lines) if lines else "(no interactable controls found on this screen)"
+    return text, elements
+
+
 def inspect_window() -> str:
     window = require_window()
-    controls: list[dict[str, str]] = []
+    infos: list[dict[str, str]] = []
     for control in window.descendants()[:500]:
         try:
             info = control.element_info
-            controls.append({
+            infos.append({
                 "name": str(info.name or "")[:500],
                 "auto_id": str(info.automation_id or "")[:500],
                 "control_type": str(info.control_type or "")[:100],
@@ -170,7 +256,11 @@ def inspect_window() -> str:
         except Exception:
             # Skip any descendant that cannot be read instead of failing inspect.
             continue
-    return json.dumps(controls, ensure_ascii=True)
+    text, elements = build_inspect(infos)
+    # Already called under STATE.lock from execute_action; record the id map so a
+    # following click/set-text/get-text can resolve a numbered reference.
+    STATE.elements = elements
+    return text
 
 
 def execute_action(action: dict[str, Any]) -> str:

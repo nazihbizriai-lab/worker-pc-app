@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, session, shell } from "electron";
 import {
   APP_NAME,
+  SUPPORT_EMAIL,
   chatSendSchema,
   chatDeltaFrameSchema,
   createCheckoutSchema,
@@ -267,13 +268,14 @@ function registerIpc(): void {
     return auth.getSession();
   });
   ipcMain.handle("auth:sign-up", async (_event, raw) => {
-    const value = credentialsSchema.parse(raw);
-    return auth.signUp(value.email, value.password);
+    const value = credentialsSchema.extend({ referralCode: z.string().max(40).optional() }).parse(raw);
+    return auth.signUp(value.email, value.password, value.referralCode);
   });
   ipcMain.handle("auth:reset", async (_event, email) => auth.sendPasswordReset(z.string().email().max(320).parse(email)));
   ipcMain.handle("auth:sign-out", async () => auth.signOut());
 
   ipcMain.handle("api:entitlement", () => api.request("/v1/entitlement"));
+  ipcMain.handle("api:referral", () => api.request("/v1/referral"));
   // Simulated checkout: writes a Stripe-shaped active entitlement through the
   // backend. Used when BILLING_MODE is "simulated" (no real payment).
   ipcMain.handle("api:simulate", (_event, raw) => api.request("/v1/billing/simulate", { method: "POST", body: createCheckoutSchema.parse(raw) }));
@@ -373,6 +375,17 @@ function registerIpc(): void {
   ipcMain.handle("conversations:delete", (_event, id) => {
     const safeId = z.string().uuid().parse(id);
     return api.request(`/v1/conversations/${safeId}`, { method: "DELETE" });
+  });
+
+  // Contact support: open a Gmail compose window addressed to the support inbox.
+  // Opening an external URL goes through the OS browser, not the sandboxed
+  // renderer, so it is handled here like the other external-link actions. Gmail
+  // is used directly (rather than a mailto) so it works without a configured
+  // desktop mail client.
+  ipcMain.handle("support:contact", async () => {
+    const url = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(SUPPORT_EMAIL)}&su=${encodeURIComponent("WorkCrew support")}`;
+    await shell.openExternal(url);
+    return { opened: true };
   });
 
   ipcMain.handle("automation:browser", (_event, action) => browserCli.execute(action));
