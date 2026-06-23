@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { PLAN_CATALOG, type SubscriptionState } from "@workcrew/contracts";
+import { PLAN_CATALOG, type BillingInterval, type PlanId, type SubscriptionState } from "@workcrew/contracts";
 import { formatTokens } from "../lib/storage";
 
 function formatDate(value: string | null): string {
@@ -13,16 +13,22 @@ export function AccountDialog({
   entitlement,
   usedMicrodollars,
   onClose,
-  onSignOut
+  onSignOut,
+  onAdjustPlan
 }: {
   entitlement: SubscriptionState;
   usedMicrodollars: number;
   onClose: () => void;
   onSignOut: () => Promise<void>;
+  onAdjustPlan: (plan: PlanId, interval: BillingInterval) => Promise<void>;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
-  const [busy, setBusy] = useState<"portal" | "signout" | null>(null);
+  const [busy, setBusy] = useState<"adjust" | "signout" | null>(null);
   const [error, setError] = useState("");
+  // Adjust plan is an in-place upgrade or downgrade only; cancellation lives in
+  // Settings under Help, not on this screen.
+  const [adjusting, setAdjusting] = useState(false);
+  const [interval, setInterval] = useState<BillingInterval>(entitlement.interval ?? "month");
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -39,13 +45,14 @@ export function AccountDialog({
   const remaining = Math.max(0, budget - used);
   const percent = budget > 0 ? Math.min(100, (used / budget) * 100) : 0;
 
-  async function manageBilling() {
-    setBusy("portal");
+  async function switchPlan(plan: PlanId) {
+    setBusy("adjust");
     setError("");
     try {
-      await window.workcrew.api.portal();
+      await onAdjustPlan(plan, interval);
+      setAdjusting(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not open billing.");
+      setError(caught instanceof Error ? caught.message : "Could not change the plan.");
     } finally {
       setBusy(null);
     }
@@ -98,14 +105,45 @@ export function AccountDialog({
 
         {error && <p className="error-banner inline">{error}</p>}
 
-        <div className="account-buttons">
-          <button className="secondary full" onClick={manageBilling} disabled={busy !== null}>
-            {busy === "portal" ? "Opening..." : "Manage billing"}
-          </button>
-          <button className="primary full" onClick={signOut} disabled={busy !== null}>
-            {busy === "signout" ? "Signing out..." : "Sign out"}
-          </button>
-        </div>
+        {adjusting ? (
+          <div className="plan-adjust">
+            <div className="billing-toggle plan-interval">
+              <button type="button" className={interval === "month" ? "is-active" : ""} onClick={() => setInterval("month")}>Monthly</button>
+              <button type="button" className={interval === "year" ? "is-active" : ""} onClick={() => setInterval("year")}>Yearly</button>
+            </div>
+            {(["pro", "ultra"] as PlanId[]).map((plan) => {
+              const catalog = PLAN_CATALOG[plan];
+              const price = interval === "year" ? catalog.yearlyPriceUsd : catalog.monthlyPriceUsd;
+              const isCurrent = entitlement.plan === plan && entitlement.interval === interval;
+              return (
+                <div key={plan} className="plan-option">
+                  <div className="plan-option-info">
+                    <strong>{catalog.name}</strong>
+                    <span>${price}/{interval === "year" ? "year" : "month"}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={isCurrent ? "secondary" : "primary"}
+                    onClick={() => switchPlan(plan)}
+                    disabled={isCurrent || busy !== null}
+                  >
+                    {isCurrent ? "Current" : busy === "adjust" ? "Switching..." : "Switch"}
+                  </button>
+                </div>
+              );
+            })}
+            <button type="button" className="link-button" onClick={() => setAdjusting(false)} disabled={busy !== null}>Done</button>
+          </div>
+        ) : (
+          <div className="account-buttons">
+            <button className="secondary full" onClick={() => setAdjusting(true)} disabled={busy !== null}>
+              Adjust plan
+            </button>
+            <button className="primary full" onClick={signOut} disabled={busy !== null}>
+              {busy === "signout" ? "Signing out..." : "Sign out"}
+            </button>
+          </div>
+        )}
       </section>
     </div>
   );

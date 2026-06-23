@@ -35,6 +35,8 @@ function describeUpdate(status: UpdateStatus | null): string {
 export function SettingsPanel({ info, onClose }: { info: AppInfo; onClose: () => void }) {
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [checking, setChecking] = useState(false);
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingError, setBillingError] = useState("");
 
   useEffect(() => window.workcrew.updates.onStatus((status) => setUpdate(status)), []);
 
@@ -45,6 +47,21 @@ export function SettingsPanel({ info, onClose }: { info: AppInfo; onClose: () =>
       await window.workcrew.updates.check(true);
     } finally {
       setChecking(false);
+    }
+  }
+
+  // Opens the billing portal in the browser. This is where a subscriber updates
+  // payment or cancels; it lives here under Help rather than on the main account
+  // screen, where only plan changes (Adjust plan) appear.
+  async function manageBilling() {
+    setBillingBusy(true);
+    setBillingError("");
+    try {
+      await window.workcrew.api.portal();
+    } catch (caught) {
+      setBillingError(caught instanceof Error ? caught.message : "Could not open billing.");
+    } finally {
+      setBillingBusy(false);
     }
   }
 
@@ -72,11 +89,15 @@ export function SettingsPanel({ info, onClose }: { info: AppInfo; onClose: () =>
       </div>
 
       <div className="save-form update-section">
-        <label className="field-label">Support</label>
-        <p className="field-hint">Questions or a problem? Reach the WorkCrew team at {SUPPORT_EMAIL}.</p>
+        <label className="field-label">Help</label>
+        <p className="field-hint">Questions or a problem? Reach the WorkCrew team at {SUPPORT_EMAIL}. To update your payment method or cancel your subscription, open billing.</p>
         <div className="save-row">
           <button className="secondary" onClick={() => void window.workcrew.support.contact()}>Contact support</button>
+          <button className="secondary" onClick={() => void manageBilling()} disabled={billingBusy}>
+            {billingBusy ? "Opening..." : "Manage billing"}
+          </button>
         </div>
+        {billingError && <p className="notice">{billingError}</p>}
       </div>
     </PanelShell>
   );

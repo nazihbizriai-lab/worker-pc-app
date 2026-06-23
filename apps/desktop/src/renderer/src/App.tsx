@@ -323,7 +323,7 @@ function Paywall({ info, onActivated }: { info: AppInfo; onActivated: (state: Su
   );
 }
 
-function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo; entitlement: SubscriptionState; onSignOut: () => Promise<void>; onUpgrade: () => Promise<void> }) {
+function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { info: AppInfo; entitlement: SubscriptionState; onSignOut: () => Promise<void>; onUpgrade: () => Promise<void>; onAdjustPlan: (plan: PlanId, interval: BillingInterval) => Promise<void> }) {
   const [model, setModel] = useState<ModelTier>(DEFAULT_CHAT_MODEL);
   const [upgrading, setUpgrading] = useState(false);
   const [upgradeError, setUpgradeError] = useState("");
@@ -646,6 +646,7 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade }: { info: AppInfo;
           usedMicrodollars={usage}
           onClose={() => setAccountOpen(false)}
           onSignOut={onSignOut}
+          onAdjustPlan={onAdjustPlan}
         />
       )}
     </main>
@@ -721,6 +722,16 @@ export default function App() {
           setEntitlement(await window.workcrew.api.changePlan("ultra", "year"));
         } else {
           await window.workcrew.api.checkout("ultra", "year");
+        }
+      }}
+      onAdjustPlan={async (plan, interval) => {
+        // The account dialog only opens for an active subscriber, so this either
+        // switches the live Stripe plan in place (with proration) or, in test
+        // mode, re-activates at the chosen plan. It never cancels.
+        if (info.billingMode === "simulated") {
+          setEntitlement(await window.workcrew.api.simulateCheckout(plan, interval));
+        } else {
+          setEntitlement(await window.workcrew.api.changePlan(plan, interval));
         }
       }}
     />
