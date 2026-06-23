@@ -47,7 +47,9 @@ const workcrew = {
   },
   support: {
     // Open the user's mail client to the support address.
-    contact: (): Promise<{ opened: boolean }> => ipcRenderer.invoke("support:contact")
+    contact: (): Promise<{ opened: boolean }> => ipcRenderer.invoke("support:contact"),
+    // Open the WorkCrew website, where billing and cancellation are managed.
+    billing: (): Promise<{ opened: boolean }> => ipcRenderer.invoke("support:billing")
   },
   settings: {
     getBackendUrl: (): Promise<string> => ipcRenderer.invoke("settings:get-backend-url"),

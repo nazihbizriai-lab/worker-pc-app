@@ -388,6 +388,13 @@ function registerIpc(): void {
     return { opened: true };
   });
 
+  // Opens the WorkCrew website in the browser. Billing (payment changes and
+  // cancellation) is managed there, not through an in-app portal.
+  ipcMain.handle("support:billing", async () => {
+    await shell.openExternal("https://getworkcrew.com/");
+    return { opened: true };
+  });
+
   ipcMain.handle("automation:browser", (_event, action) => browserCli.execute(action));
   ipcMain.handle("automation:windows", (_event, action) => windowsAgent.execute(action));
   // Voice input: transcribe 16 kHz mono PCM samples sent from the renderer.

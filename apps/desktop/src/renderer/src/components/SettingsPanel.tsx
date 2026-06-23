@@ -50,16 +50,16 @@ export function SettingsPanel({ info, onClose }: { info: AppInfo; onClose: () =>
     }
   }
 
-  // Opens the billing portal in the browser. This is where a subscriber updates
-  // payment or cancels; it lives here under Help rather than on the main account
-  // screen, where only plan changes (Adjust plan) appear.
+  // Opens the WorkCrew website, where a subscriber manages payment and cancels.
+  // Billing lives on the website rather than an in-app portal, so this is just a
+  // link out under Help.
   async function manageBilling() {
     setBillingBusy(true);
     setBillingError("");
     try {
-      await window.workcrew.api.portal();
+      await window.workcrew.support.billing();
     } catch (caught) {
-      setBillingError(caught instanceof Error ? caught.message : "Could not open billing.");
+      setBillingError(caught instanceof Error ? caught.message : "Could not open the website.");
     } finally {
       setBillingBusy(false);
     }
@@ -90,7 +90,7 @@ export function SettingsPanel({ info, onClose }: { info: AppInfo; onClose: () =>
 
       <div className="save-form update-section">
         <label className="field-label">Help</label>
-        <p className="field-hint">Questions or a problem? Reach the WorkCrew team at {SUPPORT_EMAIL}. To update your payment method or cancel your subscription, open billing.</p>
+        <p className="field-hint">Questions or a problem? Reach the WorkCrew team at {SUPPORT_EMAIL}. To update your payment method or cancel your subscription, open billing on the WorkCrew website.</p>
         <div className="save-row">
           <button className="secondary" onClick={() => void window.workcrew.support.contact()}>Contact support</button>
           <button className="secondary" onClick={() => void manageBilling()} disabled={billingBusy}>
