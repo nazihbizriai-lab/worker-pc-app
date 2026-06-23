@@ -26,6 +26,13 @@ export type RunRow = {
   lastActionSignature: string | null;
   /** Number of consecutive identical actions seen so far (1 means seen once). */
   repeatCount: number;
+  /** Cumulative model token usage across the run, for per-run cost and cache
+   * effectiveness logging. Settled cost still lives in the usage ledger; these
+   * are the raw token categories so a per-run total can be reported. */
+  tokensInput: number;
+  tokensCacheRead: number;
+  tokensCacheWrite: number;
+  tokensOutput: number;
 };
 
 const client = createDatabaseClient();
@@ -90,6 +97,10 @@ export async function initializeDatabase(db: DatabaseClient = client): Promise<v
       step_count INTEGER NOT NULL DEFAULT 0,
       last_action_signature TEXT,
       repeat_count INTEGER NOT NULL DEFAULT 0,
+      tokens_input BIGINT NOT NULL DEFAULT 0,
+      tokens_cache_read BIGINT NOT NULL DEFAULT 0,
+      tokens_cache_write BIGINT NOT NULL DEFAULT 0,
+      tokens_output BIGINT NOT NULL DEFAULT 0,
       created_at_ms BIGINT NOT NULL,
       updated_at_ms BIGINT NOT NULL
     )`,
@@ -201,6 +212,10 @@ export async function initializeDatabase(db: DatabaseClient = client): Promise<v
   await addColumnIfMissing(db, "runs", "step_count", "INTEGER NOT NULL DEFAULT 0");
   await addColumnIfMissing(db, "runs", "last_action_signature", "TEXT");
   await addColumnIfMissing(db, "runs", "repeat_count", "INTEGER NOT NULL DEFAULT 0");
+  await addColumnIfMissing(db, "runs", "tokens_input", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing(db, "runs", "tokens_cache_read", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing(db, "runs", "tokens_cache_write", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing(db, "runs", "tokens_output", "BIGINT NOT NULL DEFAULT 0");
 }
 
 async function addColumnIfMissing(db: DatabaseClient, table: string, column: string, definition: string): Promise<void> {
@@ -321,9 +336,11 @@ export async function createRun(run: RunRow): Promise<void> {
   await client.execute({
     sql: `INSERT INTO runs(
         id, user_id, model, status, messages_json, pending_tool_use_id,
-        step_count, last_action_signature, repeat_count, created_at_ms, updated_at_ms
+        step_count, last_action_signature, repeat_count,
+        tokens_input, tokens_cache_read, tokens_cache_write, tokens_output,
+        created_at_ms, updated_at_ms
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     args: [
       run.id,
       run.userId,
@@ -334,6 +351,10 @@ export async function createRun(run: RunRow): Promise<void> {
       run.stepCount,
       run.lastActionSignature,
       run.repeatCount,
+      run.tokensInput,
+      run.tokensCacheRead,
+      run.tokensCacheWrite,
+      run.tokensOutput,
       Date.now(),
       Date.now()
     ]
@@ -356,7 +377,11 @@ export async function getRun(runId: string, userId: string): Promise<RunRow | nu
     pendingToolUseId: row.pending_tool_use_id ? String(row.pending_tool_use_id) : null,
     stepCount: asNumber(row.step_count),
     lastActionSignature: row.last_action_signature ? String(row.last_action_signature) : null,
-    repeatCount: asNumber(row.repeat_count)
+    repeatCount: asNumber(row.repeat_count),
+    tokensInput: asNumber(row.tokens_input),
+    tokensCacheRead: asNumber(row.tokens_cache_read),
+    tokensCacheWrite: asNumber(row.tokens_cache_write),
+    tokensOutput: asNumber(row.tokens_output)
   };
 }
 
@@ -364,7 +389,9 @@ export async function updateRun(run: RunRow): Promise<void> {
   await client.execute({
     sql: `UPDATE runs SET
         model = ?, status = ?, messages_json = ?, pending_tool_use_id = ?,
-        step_count = ?, last_action_signature = ?, repeat_count = ?, updated_at_ms = ?
+        step_count = ?, last_action_signature = ?, repeat_count = ?,
+        tokens_input = ?, tokens_cache_read = ?, tokens_cache_write = ?, tokens_output = ?,
+        updated_at_ms = ?
       WHERE id = ? AND user_id = ?`,
     args: [
       run.model,
@@ -374,6 +401,10 @@ export async function updateRun(run: RunRow): Promise<void> {
       run.stepCount,
       run.lastActionSignature,
       run.repeatCount,
+      run.tokensInput,
+      run.tokensCacheRead,
+      run.tokensCacheWrite,
+      run.tokensOutput,
       Date.now(),
       run.id,
       run.userId

@@ -351,7 +351,11 @@ app.post("/v1/runs", async (request) => {
     pendingToolUseId: null,
     stepCount: 0,
     lastActionSignature: null,
-    repeatCount: 0
+    repeatCount: 0,
+    tokensInput: 0,
+    tokensCacheRead: 0,
+    tokensCacheWrite: 0,
+    tokensOutput: 0
   });
   return { runId: id, status: "ready" };
 });
@@ -419,6 +423,32 @@ app.post<{ Params: { runId: string } }>("/v1/runs/:runId/next", async (request):
     await settleBudget(reservation.reservationId, actualCost, result.providerRequestId);
     run.messages.push({ role: "assistant", content: result.content });
 
+    // Token instrumentation. Accumulate the raw token categories on the run and
+    // log this step plus the running total, so prompt-cache effectiveness
+    // (cacheRead growing while input stays small) and per-run usage are visible
+    // without re-deriving them from the cost ledger.
+    run.tokensInput += result.usage.input_tokens;
+    run.tokensCacheRead += result.usage.cache_read_input_tokens;
+    run.tokensCacheWrite += result.usage.cache_creation_input_tokens;
+    run.tokensOutput += result.usage.output_tokens;
+    request.log.info({
+      runId: run.id,
+      step: run.stepCount,
+      tier,
+      stepTokens: {
+        input: result.usage.input_tokens,
+        cacheRead: result.usage.cache_read_input_tokens,
+        cacheWrite: result.usage.cache_creation_input_tokens,
+        output: result.usage.output_tokens
+      },
+      runTokens: {
+        input: run.tokensInput,
+        cacheRead: run.tokensCacheRead,
+        cacheWrite: run.tokensCacheWrite,
+        output: run.tokensOutput
+      }
+    }, "automation step token usage");
+
     // Loop protection. A finish action ends the run and is never a loop. For
     // any other action, compare its normalized signature with the previous one
     // and stop the run when the same action repeats too many times in a row
@@ -448,6 +478,18 @@ app.post<{ Params: { runId: string } }>("/v1/runs/:runId/next", async (request):
 
     run.pendingToolUseId = result.action.kind === "finish" ? null : result.toolUseId ?? null;
     run.status = result.action.kind === "finish" ? "complete" : "awaiting_tool";
+    if (run.status === "complete") {
+      request.log.info({
+        runId: run.id,
+        steps: run.stepCount,
+        runTokens: {
+          input: run.tokensInput,
+          cacheRead: run.tokensCacheRead,
+          cacheWrite: run.tokensCacheWrite,
+          output: run.tokensOutput
+        }
+      }, "automation run complete: total token usage");
+    }
     await updateRun(run);
     return {
       runId: run.id,
