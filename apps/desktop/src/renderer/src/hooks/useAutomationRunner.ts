@@ -13,6 +13,10 @@ import { buildRecipe, getRecipe, isReplayEnabled, normalizeTaskKey, saveRecipe, 
 
 const MAX_STEPS = 24;
 
+// Windows commands that physically move the mouse or type, so the renderer raises
+// the "do not move the mouse" overlay while they run.
+const WINDOWS_MOUSE_COMMANDS = new Set(["click", "set-text", "type-keys"]);
+
 export type StepStatus = "running" | "ok" | "error" | "declined";
 export type RunStep = { id: string; label: string; detail?: string; status: StepStatus };
 export type RunStatus = "idle" | "running" | "complete" | "failed" | "stopped";
@@ -51,6 +55,23 @@ export function useAutomationRunner(): AutomationRunner {
     autoApproveRef.current = value;
   }
 
+  // While a Windows automation physically uses the mouse/keyboard, show an
+  // on-screen overlay telling the user not to move the mouse. Tracked in a ref so
+  // it is raised once and reliably lowered when the run ends, on every exit path.
+  const mouseActiveRef = useRef(false);
+  function showOverlayFor(action: AutomationAction): void {
+    if (action.kind === "windows" && WINDOWS_MOUSE_COMMANDS.has(action.command)) {
+      mouseActiveRef.current = true;
+      void window.workcrew.automation.overlay(true);
+    }
+  }
+  function hideOverlay(): void {
+    if (mouseActiveRef.current) {
+      mouseActiveRef.current = false;
+      void window.workcrew.automation.overlay(false);
+    }
+  }
+
   function requestApproval(action: AutomationAction): Promise<boolean> {
     return new Promise((resolve) => {
       approvalResolve.current = resolve;
@@ -67,6 +88,7 @@ export function useAutomationRunner(): AutomationRunner {
 
   function stop(): void {
     stoppedRef.current = true;
+    hideOverlay();
     void window.workcrew.automation.stop();
     setStatus("stopped");
   }
@@ -92,6 +114,7 @@ export function useAutomationRunner(): AutomationRunner {
       }
 
       try {
+        showOverlayFor(action);
         await window.workcrew.automation.execute(action);
         setSteps((current) => current.map((item) => (item.id === id ? { ...item, status: "ok" } : item)));
       } catch {
@@ -106,6 +129,7 @@ export function useAutomationRunner(): AutomationRunner {
     const trimmed = task.trim();
     if (trimmed.length < 3 || status === "running") return;
     stoppedRef.current = false;
+    mouseActiveRef.current = false;
     setSteps([]);
     setSummary("");
     setError("");
@@ -119,6 +143,7 @@ export function useAutomationRunner(): AutomationRunner {
     const recipe = isReplayEnabled() ? getRecipe(normalizeTaskKey(trimmed)) : null;
     if (recipe) {
       const outcome = await replayRecipe(recipe);
+      hideOverlay();
       if (outcome === "complete") {
         setSummary(recipe.summary || "Task complete.");
         setStatus("complete");
@@ -182,6 +207,7 @@ export function useAutomationRunner(): AutomationRunner {
         }
 
         try {
+          showOverlayFor(action);
           const output = await window.workcrew.automation.execute(action);
           setSteps((current) => current.map((item) => (item.id === id ? { ...item, status: "ok" } : item)));
           result = { toolUseId: response.toolUseId, ok: true, output: redactResult(output) };
@@ -198,6 +224,7 @@ export function useAutomationRunner(): AutomationRunner {
       setError(caught instanceof Error ? caught.message : "The task could not be started.");
       setStatus("failed");
     } finally {
+      hideOverlay();
       setStatus((current) => {
         addHistory({
           task: trimmed,
