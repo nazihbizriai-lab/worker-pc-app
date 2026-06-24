@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { AttachmentRef, ModelTier } from "@workcrew/contracts";
 import type { ChatTurn } from "../lib/chat";
+import type { AutomationRunner } from "../hooks/useAutomationRunner";
 import { Dictation } from "../lib/dictation";
 import { Dropdown, type DropdownOption } from "./Dropdown";
 import { MessageList } from "./MessageList";
+import { AutomationActivity } from "./AutomationActivity";
 
 type PickedFile = { path: string; name: string; size: number };
 // A file in the composer: it shows immediately with a spinner while it uploads,
@@ -34,6 +36,31 @@ function MicIcon() {
       <path d="M5 11a7 7 0 0 0 14 0" />
       <line x1="12" y1="18" x2="12" y2="21" />
     </svg>
+  );
+}
+
+// A compact on/off toggle that sits under the composer. When on, automations run
+// their actions without asking for approval each time. It reads as subordinate to
+// the composer (muted) and brightens when on, so the user always sees its state.
+// Shell commands still ask every time (the desktop enforces that separately), so
+// this never fully removes the safety prompt.
+function AlwaysAllowToggle({ checked, onChange }: { checked: boolean; onChange: (value: boolean) => void }) {
+  return (
+    <label
+      className={`always-toggle ${checked ? "always-toggle-on" : ""}`}
+      title="Run automation actions without asking each time"
+    >
+      <span className={`switch ${checked ? "switch-on" : ""}`} aria-hidden="true">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(event) => onChange(event.target.checked)}
+          aria-label="Always allow actions without asking"
+        />
+        <span className="switch-knob" />
+      </span>
+      <span className="always-toggle-label">Always allow</span>
+    </label>
   );
 }
 
@@ -99,7 +126,12 @@ export function ChatView({
   onSend,
   onStop,
   onAutomate,
-  onRecord
+  onRecord,
+  runner,
+  automationTask,
+  alwaysAllow,
+  onAlwaysAllowChange,
+  onSaveRoutine
 }: {
   turns: ChatTurn[];
   streaming: boolean;
@@ -109,6 +141,11 @@ export function ChatView({
   onStop: () => void;
   onAutomate: (task: string) => void;
   onRecord?: () => void;
+  runner: AutomationRunner;
+  automationTask: string;
+  alwaysAllow: boolean;
+  onAlwaysAllowChange: (value: boolean) => void;
+  onSaveRoutine?: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -119,7 +156,11 @@ export function ChatView({
   const [voiceNote, setVoiceNote] = useState("");
   const dictationRef = useRef<Dictation | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const hasConversation = turns.length > 0;
+  // Show the conversation layout once there are chat turns OR an automation is
+  // running/has run, so an automation started from the empty state unfolds in
+  // place rather than leaving the user on the greeting screen.
+  const runnerActive = runner.running || runner.steps.length > 0 || Boolean(runner.summary) || Boolean(runner.error);
+  const hasConversation = turns.length > 0 || runnerActive;
 
   const uploading = attachments.some((item) => item.status === "uploading");
   const readyRefs = attachments.filter((item) => item.status === "ready" && item.ref).map((item) => item.ref as AttachmentRef);
@@ -343,11 +384,20 @@ export function ChatView({
     </div>
   );
 
+  // The "Always allow" toggle sits just under the composer, on the left, like a
+  // permissions switch. It is present in both the empty and active layouts.
+  const aux = (
+    <div className="composer-aux">
+      <AlwaysAllowToggle checked={alwaysAllow} onChange={onAlwaysAllowChange} />
+    </div>
+  );
+
   if (!hasConversation) {
     return (
       <div className="chat-empty">
         <h1 className="greeting">{timeGreeting()}</h1>
         {composer}
+        {aux}
         <p className="suggestion-label">Try an automation</p>
         <div className="suggestion-chips">
           {AUTOMATION_PROMPTS.map((prompt) => (
@@ -368,8 +418,9 @@ export function ChatView({
     <div className="chat-active">
       <div className="chat-scroll">
         <MessageList turns={turns} streaming={streaming} />
+        <AutomationActivity runner={runner} task={automationTask} onSaveRoutine={onSaveRoutine} />
       </div>
-      <div className="composer-dock">{composer}</div>
+      <div className="composer-dock">{composer}{aux}</div>
     </div>
   );
 }

@@ -39,6 +39,7 @@ export type AutomationRunner = {
   run: (task: string, model: ModelTier, label?: string) => Promise<void>;
   decide: (approved: boolean) => void;
   stop: () => void;
+  clear: () => void;
   setAutoApprove: (value: boolean) => void;
 };
 
@@ -87,6 +88,18 @@ export function useAutomationRunner(): AutomationRunner {
     const resolve = approvalResolve.current;
     approvalResolve.current = null;
     resolve?.(approved);
+  }
+
+  // Reset the inline run activity (steps, status, summary) so it does not linger
+  // into a new chat or the next message. A no-op while a run is in progress.
+  function clear(): void {
+    if (status === "running") return;
+    setSteps([]);
+    setSummary("");
+    setError("");
+    setLabel("");
+    setStatus("idle");
+    setPending(null);
   }
 
   function stop(): void {
@@ -266,5 +279,5 @@ export function useAutomationRunner(): AutomationRunner {
     }
   }
 
-  return { steps, status, summary, error, label, pending, run, decide, stop, setAutoApprove, running: status === "running" };
+  return { steps, status, summary, error, label, pending, run, decide, stop, clear, setAutoApprove, running: status === "running" };
 }

@@ -13,7 +13,6 @@ import { formatTokens } from "./lib/storage";
 import { DEFAULT_CHAT_MODEL, turnsFromMessages } from "./lib/chat";
 import { useChatStream } from "./hooks/useChatStream";
 import { ChatView } from "./components/ChatView";
-import { AutomationPanel } from "./components/AutomationPanel";
 import { RoutinesPanel } from "./components/RoutinesPanel";
 import { PermissionsPanel } from "./components/PermissionsPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -33,7 +32,7 @@ import {
 
 type AppInfo = { name: string; version: string; authMode: string; billingMode: string };
 type Phase = "loading" | "auth" | "paywall" | "workspace";
-type PanelView = "chat" | "automation" | "routines" | "permissions" | "settings";
+type PanelView = "chat" | "routines" | "permissions" | "settings";
 
 const EMPTY_ENTITLEMENT: SubscriptionState = {
   active: false,
@@ -370,9 +369,9 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
   const [routines, setRoutines] = useState<Routine[]>(() => loadRoutines());
   const [recents, setRecents] = useState<ConversationSummary[]>([]);
   const [loadingId, setLoadingId] = useState<string | null>(null);
-  // An example automation the user clicked on the home screen, carried into the
-  // Automation panel as its starting task.
-  const [automationSeed, setAutomationSeed] = useState("");
+  // The task of the automation currently shown inline in the chat (running or
+  // just finished), used as the heading of the inline run activity.
+  const [automationTask, setAutomationTask] = useState("");
   // A task being turned into a routine via "Save as a routine", carried into the
   // Routines form.
   const [routineSeed, setRoutineSeed] = useState("");
@@ -453,23 +452,42 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
 
   function startNewChat() {
     chat.reset();
+    runner.clear();
+    setAutomationTask("");
     setView("chat");
     setAccountOpen(false);
   }
 
-  // Open the Automation panel with an example task filled in, ready to run.
-  function startAutomation(task: string) {
-    setAutomationSeed(task);
-    setView("automation");
+  // Run an automation inline in the chat (from a typed task or an example chip).
+  // The task auto-runs as soon as it is recognised; there is no separate "run"
+  // button. The shared runner drives the steps and the chat shows them in place.
+  function runAutomation(task: string, label = "Task") {
+    const trimmed = task.trim();
+    if (trimmed.length < 3 || runner.running) return;
+    setView("chat");
     setAccountOpen(false);
+    setAutomationTask(trimmed);
+    void runner.run(trimmed, model, label);
   }
 
-  // Carry a just-run automation into the Routines form so it can be scheduled.
+  // Carry a task into the Routines form so it can be named and scheduled.
   function saveAsRoutine(task: string) {
     setRoutineSeed(task);
     setView("routines");
     setAccountOpen(false);
   }
+
+  // Save whatever the current chat is doing as a routine: prefer the automation
+  // task in progress, otherwise the most recent thing the user asked. The
+  // Routines form then lets the user name and schedule it.
+  function saveCurrentAsRoutine() {
+    const lastUser = [...chat.turns].reverse().find((turn) => turn.role === "user");
+    const task = (automationTask || lastUser?.text || "").trim();
+    if (task.length < 3) return;
+    saveAsRoutine(task);
+  }
+  const canSaveRoutine =
+    chat.turns.length > 0 || runner.steps.length > 0 || Boolean(runner.summary) || automationTask.trim().length >= 3;
 
   // Load a saved conversation into the transcript.
   async function openConversation(id: string) {
@@ -477,6 +495,8 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
     setLoadingId(id);
     setView("chat");
     setAccountOpen(false);
+    runner.clear();
+    setAutomationTask("");
     try {
       const detail = await window.workcrew.conversations.get(id);
       chat.reset(turnsFromMessages(detail.messages), detail.id);
@@ -489,14 +509,17 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
 
   function send(text: string, attachments: AttachmentRef[]) {
     // If the message is a request to act on the computer (and has no attachments
-    // to reason over), hand it to the automation engine and open the Automation
-    // view so the user sees it run. Otherwise answer it in chat.
+    // to reason over), hand it to the automation engine, which runs inline in the
+    // chat. Otherwise answer it in chat.
     if (attachments.length === 0 && !runner.running && looksLikeAutomation(text)) {
-      setAutomationSeed(text);
-      setView("automation");
-      setAccountOpen(false);
-      void runner.run(text, model, "Task");
+      runAutomation(text, "Task");
       return;
+    }
+    // A normal chat message clears any finished automation activity so the
+    // conversation stays tidy, then answers in chat.
+    if (!runner.running) {
+      runner.clear();
+      setAutomationTask("");
     }
     void chat.send({ text, model, attachments });
   }
@@ -546,13 +569,29 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
           </span> New chat
         </button>
         <nav aria-label="Workspace sections">
-          <button
-            className={view === "routines" ? "nav-active" : ""}
-            aria-current={view === "routines" ? "page" : undefined}
-            onClick={() => { setRoutineSeed(""); setView("routines"); }}
-          >
-            <span className="nav-icon"><BoltIcon /></span> Routines
-          </button>
+          <div className="nav-row">
+            <button
+              className={view === "routines" ? "nav-active" : ""}
+              aria-current={view === "routines" ? "page" : undefined}
+              onClick={() => { setRoutineSeed(""); setView("routines"); }}
+            >
+              <span className="nav-icon"><BoltIcon /></span> Routines
+            </button>
+            {canSaveRoutine && (
+              <button
+                type="button"
+                className="routine-add"
+                onClick={saveCurrentAsRoutine}
+                aria-label="Save this chat as a routine"
+                title="Save this chat as a routine"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
+            )}
+          </div>
           <button
             className={view === "permissions" ? "nav-active" : ""}
             aria-current={view === "permissions" ? "page" : undefined}
@@ -649,8 +688,13 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
           onModelChange={setModel}
           onSend={send}
           onStop={chat.stop}
-          onAutomate={startAutomation}
+          onAutomate={(task) => runAutomation(task, "Task")}
           onRecord={() => setRecorderOpen(true)}
+          runner={runner}
+          automationTask={automationTask}
+          alwaysAllow={alwaysAllow}
+          onAlwaysAllowChange={setAlwaysAllow}
+          onSaveRoutine={saveCurrentAsRoutine}
         />
         <footer>WorkCrew can make mistakes. Check important details.</footer>
       </section>
@@ -662,7 +706,6 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
           onChange={setPermissions}
         />
       )}
-      {view === "automation" && <AutomationPanel runner={runner} model={model} initialTask={automationSeed} onSaveRoutine={saveAsRoutine} alwaysAllow={alwaysAllow} onAlwaysAllowChange={setAlwaysAllow} onClose={() => setView("chat")} />}
       {view === "routines" && (
         <RoutinesPanel runner={runner} model={model} routines={routines} initialTask={routineSeed} onChange={setRoutines} onClose={() => setView("chat")} />
       )}
@@ -689,7 +732,7 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
         <RecorderDialog
           onClose={() => setRecorderOpen(false)}
           onSaved={() => setRoutines(loadRoutines())}
-          onRun={(task, runName) => { setView("automation"); setAutomationSeed(task); void runner.run(task, model, runName || "Recorded task"); }}
+          onRun={(task, runName) => runAutomation(task, runName || "Recorded task")}
         />
       )}
     </main>
