@@ -460,7 +460,9 @@ select option:checked { background-color: var(--panel-2); }
 @keyframes run-pulse { 0% { box-shadow: 0 0 0 0 rgba(139,92,246,.5); } 70% { box-shadow: 0 0 0 7px rgba(139,92,246,0); } 100% { box-shadow: 0 0 0 0 rgba(139,92,246,0); } }
 .run-steps { margin-top: 12px; }
 .run-summary { margin: 12px 0 0; color: var(--text); font-size: var(--fs-ui); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-.run-save { margin-top: 10px; }
+.run-card-actions { display: flex; gap: 8px; margin-top: 14px; }
+.run-save-btn { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; color: var(--text); background: var(--panel-2); font-size: 12px; font-weight: 650; transition: border-color .15s, background .15s; }
+.run-save-btn:hover { border-color: var(--accent); background: rgba(139,92,246,.10); }
 /* "Always allow" toggle under the composer: muted by default, brightens when on. */
 .composer-aux { display: flex; align-items: center; padding: 9px 4px 0; }
 .always-toggle { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; color: var(--muted); font-size: 12px; user-select: none; }

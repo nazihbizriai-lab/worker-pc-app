@@ -1,4 +1,3 @@
-import { useEffect, useRef } from "react";
 import type { ChatTurn } from "../lib/chat";
 import { Markdown } from "../lib/markdown";
 
@@ -46,14 +45,9 @@ function UserTurn({ turn }: { turn: ChatTurn }) {
   );
 }
 
-export function MessageList({ turns, streaming }: { turns: ChatTurn[]; streaming: boolean }) {
-  const endRef = useRef<HTMLDivElement>(null);
-
-  // Keep the latest content in view as deltas arrive and as new turns append.
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [turns, streaming]);
-
+export function MessageList({ turns }: { turns: ChatTurn[]; streaming?: boolean }) {
+  // Scrolling is managed by the parent (ChatView), which only sticks to the
+  // bottom when the user is already there, so they can freely scroll up.
   return (
     <div className="message-list" aria-live="polite">
       {turns.map((turn) =>
@@ -63,7 +57,6 @@ export function MessageList({ turns, streaming }: { turns: ChatTurn[]; streaming
           <AssistantTurn key={turn.id} turn={turn} />
         )
       )}
-      <div ref={endRef} />
     </div>
   );
 }

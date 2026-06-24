@@ -386,6 +386,27 @@ function registerIpc(): void {
     return run;
   });
 
+  // Upload an image from the OS clipboard (a copied screenshot) so it can be
+  // pasted into the chat. Electron reads the clipboard image directly in the main
+  // process; the sandboxed renderer cannot. Returns null when there is no image.
+  ipcMain.handle("attachments:paste-image", async () => {
+    const image = clipboard.readImage();
+    if (image.isEmpty()) return null;
+    const buffer = image.toPNG();
+    if (!buffer.byteLength) return null;
+    if (buffer.byteLength > MAX_UPLOAD_BYTES) {
+      throw new Error("That image is too large. The limit is 10 MB.");
+    }
+    const body = {
+      filename: `pasted-image-${Date.now()}.png`,
+      mimeType: "image/png",
+      base64: buffer.toString("base64")
+    };
+    const run = attachmentUploadChain.then(() => api.request("/v1/attachments", { method: "POST", body }));
+    attachmentUploadChain = run.catch(() => {});
+    return run;
+  });
+
   // Copy text to the OS clipboard from the sandboxed renderer, which cannot use
   // the browser clipboard API (not a secure context). Used by the invite link.
   ipcMain.handle("clipboard:write", (_event, text: unknown) => {

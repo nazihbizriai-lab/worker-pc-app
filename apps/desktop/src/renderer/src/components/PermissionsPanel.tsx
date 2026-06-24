@@ -17,7 +17,7 @@ export function PermissionsPanel({
   return (
     <PanelShell
       title="Permissions"
-      subtitle="WorkCrew asks before every write action. Sensitive categories always require approval and cannot be turned off."
+      subtitle="When Always allow is off, WorkCrew asks before every write action and you approve to continue. Turning Always allow on stops the asking for the categories left on below. Sensitive categories always ask and cannot be turned off."
       onClose={onClose}
     >
       <ul className="permission-list">
@@ -47,9 +47,9 @@ export function PermissionsPanel({
         })}
       </ul>
       <p className="panel-note">
-        Turning an optional category off does not skip approval for sensitive steps. WorkCrew still asks before any
-        browser or Windows write action, and consequential actions such as purchases, messages, and deletions are
-        always confirmed.
+        A category left on is covered by Always allow. Turn a category off to keep being asked about it even while
+        Always allow is on. Sensitive actions such as purchases, messages, and deletions are always confirmed, and
+        running a command on your computer always asks separately.
       </p>
     </PanelShell>
   );

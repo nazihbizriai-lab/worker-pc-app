@@ -241,14 +241,14 @@ export const PERMISSION_CATEGORIES: PermissionCategory[] = [
   {
     id: "browser-writes",
     title: "Browser actions",
-    description: "Clicking, typing, and form entry inside the automated browser. Approved per action.",
+    description: "Clicking, typing, and form entry inside the automated browser. Asked each time unless Always allow is on. Turn off to always be asked.",
     locked: false,
     defaultOn: true
   },
   {
     id: "windows-writes",
     title: "Windows actions",
-    description: "Setting text and sending keystrokes to desktop windows. Approved per action.",
+    description: "Setting text and sending keystrokes to desktop apps. Asked each time unless Always allow is on. Turn off to always be asked.",
     locked: false,
     defaultOn: true
   },

@@ -97,6 +97,14 @@ function looksLikeAutomation(text: string): boolean {
   return false;
 }
 
+// A plain question or a writing request, as opposed to an instruction to redo a
+// task. Used while iterating on an automation: a question is answered in chat,
+// anything else is treated as a correction that re-runs the task.
+function isQuestionLike(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  return /^(how|what|whats|what's|why|when|who|where|which|is |are |do |does |can i|can you|can u|could you|would you|explain|tell me|write|draft|compose|summari|translate|define|describe|give me|list|brainstorm|suggest|recommend|help me|teach me|show me how)\b/.test(t);
+}
+
 function errorMessage(error: unknown): string {
   let message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   message = message
@@ -382,6 +390,16 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan, onEn
   // The task of the automation currently shown inline in the chat (running or
   // just finished), used as the heading of the inline run activity.
   const [automationTask, setAutomationTask] = useState("");
+  // Once a task has run in this chat, the chat is in "automation mode": typed
+  // follow-ups that are not plain questions re-run the task (with the correction
+  // added) so the user can refine and re-run repeatedly before saving a routine.
+  const [automationMode, setAutomationMode] = useState(false);
+  // Text to drop into the chat composer (for example a just-recorded task), with a
+  // nonce so the same text can be sent into the composer more than once.
+  const [composerSeed, setComposerSeed] = useState<{ text: string; nonce: number }>({ text: "", nonce: 0 });
+  function seedComposer(text: string) {
+    setComposerSeed((current) => ({ text, nonce: current.nonce + 1 }));
+  }
   // A task being turned into a routine via "Save as a routine", carried into the
   // Routines form.
   const [routineSeed, setRoutineSeed] = useState("");
@@ -457,6 +475,13 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan, onEn
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [alwaysAllow]);
 
+  // Keep the runner's per-category permissions in sync, so turning a category off
+  // makes it ask again even while "Always allow" is on.
+  useEffect(() => {
+    runner.setPermissions(permissions);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [permissions]);
+
   // Refresh Recents after a conversation finishes its first turn so a brand new
   // chat appears in the sidebar.
   useEffect(() => {
@@ -467,6 +492,7 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan, onEn
     chat.reset();
     runner.clear();
     setAutomationTask("");
+    setAutomationMode(false);
     setView("chat");
     setAccountOpen(false);
   }
@@ -474,13 +500,21 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan, onEn
   // Run an automation inline in the chat (from a typed task or an example chip).
   // The task auto-runs as soon as it is recognised; there is no separate "run"
   // button. The shared runner drives the steps and the chat shows them in place.
+  // Running a task puts the chat in automation mode so follow-ups can re-run it.
   function runAutomation(task: string, label = "Task") {
     const trimmed = task.trim();
     if (trimmed.length < 3 || runner.running) return;
     setView("chat");
     setAccountOpen(false);
     setAutomationTask(trimmed);
+    setAutomationMode(true);
     void runner.run(trimmed, model, label);
+  }
+
+  // Run the current task again unchanged (the "Run again" button on a finished
+  // run), so the user can retry after fixing something on screen.
+  function rerunAutomation() {
+    if (automationTask.trim().length >= 3) runAutomation(automationTask, "Task");
   }
 
   // Carry a task into the Routines form so it can be named and scheduled.
@@ -510,6 +544,7 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan, onEn
     setAccountOpen(false);
     runner.clear();
     setAutomationTask("");
+    setAutomationMode(false);
     try {
       const detail = await window.workcrew.conversations.get(id);
       chat.reset(turnsFromMessages(detail.messages), detail.id);
@@ -521,18 +556,27 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan, onEn
   }
 
   function send(text: string, attachments: AttachmentRef[]) {
-    // If the message is a request to act on the computer (and has no attachments
-    // to reason over), hand it to the automation engine, which runs inline in the
-    // chat. Otherwise answer it in chat.
-    if (attachments.length === 0 && !runner.running && looksLikeAutomation(text)) {
-      runAutomation(text, "Task");
-      return;
+    if (attachments.length === 0 && !runner.running) {
+      // While iterating on a task in this chat, a follow-up that is not a plain
+      // question is treated as a correction: re-run the task with the fix added so
+      // the user can keep refining and re-running before saving it as a routine.
+      if (automationMode && !isQuestionLike(text)) {
+        const combined = `${automationTask}\n\nThe last attempt was not right. Correction from the user: ${text}\nPlease do the whole task again with this fix.`;
+        runAutomation(combined, "Task");
+        return;
+      }
+      // A fresh request to act on the computer starts an inline automation.
+      if (!automationMode && looksLikeAutomation(text)) {
+        runAutomation(text, "Task");
+        return;
+      }
     }
-    // A normal chat message clears any finished automation activity so the
-    // conversation stays tidy, then answers in chat.
+    // Otherwise answer in chat. A normal chat message (with no in-flight run)
+    // clears any finished automation activity so the conversation stays tidy.
     if (!runner.running) {
       runner.clear();
       setAutomationTask("");
+      setAutomationMode(false);
     }
     void chat.send({ text, model, attachments });
   }
@@ -716,6 +760,8 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan, onEn
           alwaysAllow={alwaysAllow}
           onAlwaysAllowChange={setAlwaysAllow}
           onSaveRoutine={saveCurrentAsRoutine}
+          onRerun={rerunAutomation}
+          composerSeed={composerSeed}
         />
         <footer>WorkCrew can make mistakes. Check important details.</footer>
       </section>
@@ -761,8 +807,7 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan, onEn
       {recorderOpen && (
         <RecorderDialog
           onClose={() => setRecorderOpen(false)}
-          onSaved={() => setRoutines(loadRoutines())}
-          onRun={(task, runName) => runAutomation(task, runName || "Recorded task")}
+          onUseInChat={(task) => { setRecorderOpen(false); seedComposer(task); }}
         />
       )}
     </main>

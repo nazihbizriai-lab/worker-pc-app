@@ -185,13 +185,6 @@ export function RoutinesPanel({
         <p className="field-hint">Routines run while WorkCrew is open, and ask before any change just like a normal task.</p>
       </div>
 
-      {(runner.running || runner.summary) && (
-        <div className={`automation-summary ${runner.status}`} role="status">
-          <strong>{runner.label || "Routine"}: {runner.running ? "Running..." : runner.status === "complete" ? "Done" : "Stopped"}</strong>
-          {runner.summary && <p>{runner.summary}</p>}
-        </div>
-      )}
-
       {routines.length === 0 ? (
         <div className="empty-state">
           <strong>No routines yet</strong>

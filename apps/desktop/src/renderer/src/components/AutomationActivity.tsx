@@ -1,4 +1,3 @@
-import { useEffect, useRef } from "react";
 import type { AutomationRunner } from "../hooks/useAutomationRunner";
 
 // Shows an automation run inline inside the chat: the task being done, each step
@@ -7,19 +6,15 @@ import type { AutomationRunner } from "../hooks/useAutomationRunner";
 export function AutomationActivity({
   runner,
   task,
-  onSaveRoutine
+  onSaveRoutine,
+  onRerun
 }: {
   runner: AutomationRunner;
   task: string;
   onSaveRoutine?: () => void;
+  onRerun?: () => void;
 }) {
   const { steps, summary, status, error, running } = runner;
-  const endRef = useRef<HTMLDivElement>(null);
-
-  // Keep the latest step in view as the run progresses.
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [steps.length, summary, running]);
 
   // Nothing to show until a run has started or has left a result behind.
   if (!running && steps.length === 0 && !summary && !error) return null;
@@ -63,12 +58,20 @@ export function AutomationActivity({
       {summary && <p className="run-summary">{summary}</p>}
       {error && <p className="error-banner inline">{error}</p>}
 
-      {onSaveRoutine && status === "complete" && (
-        <button type="button" className="link-button run-save" onClick={onSaveRoutine}>
-          Save as a routine
-        </button>
+      {!running && (status === "complete" || status === "failed" || status === "stopped") && (onRerun || onSaveRoutine) && (
+        <div className="run-card-actions">
+          {onRerun && (
+            <button type="button" className="run-save-btn" onClick={onRerun}>
+              Run again
+            </button>
+          )}
+          {onSaveRoutine && status === "complete" && (
+            <button type="button" className="run-save-btn" onClick={onSaveRoutine}>
+              Save as a routine
+            </button>
+          )}
+        </div>
       )}
-      <div ref={endRef} />
     </section>
   );
 }

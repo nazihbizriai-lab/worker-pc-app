@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { RecordedEvent } from "@workcrew/contracts";
-import { addRoutine } from "../lib/storage";
 
 // Record clicks: the user demonstrates a task once in the automation browser or a
-// desktop app. WorkCrew captures a readable trace of what they did, the model
-// turns it into one reusable instruction, and that instruction is saved as a
-// routine. Every run goes through the normal model loop, so it adapts to whatever
-// is on screen that day (a different email, a different value) instead of
-// replaying the exact clicks, which would break the moment the page changes.
+// desktop app. WorkCrew captures a readable trace of what they did and the model
+// turns it into one reusable instruction. That instruction is placed in the chat
+// so the user can review it, refine it (even by sending a screenshot), run it, and
+// only then save it as a routine. Every run goes through the normal model loop, so
+// it adapts to whatever is on screen that day instead of replaying exact clicks.
 
 type Target = "browser" | "windows";
 type Phase = "choose" | "recording" | "summarizing" | "review";
@@ -27,18 +26,15 @@ function friendly(error: unknown): string {
 
 export function RecorderDialog({
   onClose,
-  onSaved,
-  onRun
+  onUseInChat
 }: {
   onClose: () => void;
-  onSaved: () => void;
-  onRun?: (task: string, name: string) => void;
+  onUseInChat: (task: string) => void;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const [phase, setPhase] = useState<Phase>("choose");
   const [target, setTarget] = useState<Target>("browser");
   const [task, setTask] = useState("");
-  const [name, setName] = useState("");
   const [stepCount, setStepCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -103,9 +99,7 @@ export function RecorderDialog({
   async function writeInstruction(surface: Target, events: RecordedEvent[]) {
     try {
       const { task: written } = await window.workcrew.recorder.summarize(surface, events);
-      const cleaned = written.trim();
-      setTask(cleaned);
-      if (!name.trim()) setName(cleaned.split(/[.\n]/)[0]?.slice(0, 48).trim() ?? "");
+      setTask(written.trim());
       setPhase("review");
     } catch (caught) {
       setError(`${friendly(caught)} You can write the instruction yourself below.`);
@@ -113,34 +107,15 @@ export function RecorderDialog({
     }
   }
 
-  function persist(): { name: string; task: string } | null {
-    const trimmedName = name.trim();
+  // Send the instruction to the chat composer. The user reviews and runs it there,
+  // then saves it as a routine from the chat once it works the way they want.
+  function useInChat() {
     const trimmedTask = task.trim();
     if (trimmedTask.length < 3) {
-      setError("Write a short instruction describing the task before saving.");
-      return null;
+      setError("Write a short instruction describing the task first.");
+      return;
     }
-    if (trimmedName.length < 2) {
-      setError("Give this task a name so you can find it in Routines.");
-      return null;
-    }
-    // Save as a manual routine. Running it goes through the normal model loop,
-    // which performs the instruction and adapts to whatever is on screen.
-    addRoutine({ name: trimmedName, task: trimmedTask, cadence: "manual", hour: 9, minute: 0, weekday: 1, enabled: true });
-    onSaved();
-    return { name: trimmedName, task: trimmedTask };
-  }
-
-  function save() {
-    if (persist()) onClose();
-  }
-
-  function saveAndRun() {
-    const saved = persist();
-    if (saved) {
-      onRun?.(saved.task, saved.name);
-      onClose();
-    }
+    onUseInChat(trimmedTask);
   }
 
   return (
@@ -199,7 +174,7 @@ export function RecorderDialog({
 
         {phase === "review" && (
           <>
-            <p className="modal-text">Here is the instruction WorkCrew will follow each time. Edit it if you like, name it, and save.</p>
+            <p className="modal-text">Here is the instruction WorkCrew wrote from your recording. Edit it if you like, then add it to the chat to review, run, and refine it. You can save it as a routine from the chat once it works the way you want.</p>
             <textarea
               className="recorder-instruction"
               value={task}
@@ -209,19 +184,9 @@ export function RecorderDialog({
               maxLength={2_000}
               aria-label="Task instruction"
             />
-            <input
-              className="invite-link"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="Name this task, for example: Summarize my latest email"
-              maxLength={80}
-              onKeyDown={(event) => { if (event.key === "Enter") save(); }}
-              aria-label="Task name"
-            />
             <div className="account-buttons">
-              <button className="secondary full" onClick={() => { setPhase("choose"); setTask(""); setName(""); setError(""); }}>Record again</button>
-              <button className="secondary full" onClick={save}>Save</button>
-              {onRun && <button className="primary full" onClick={saveAndRun}>Save and run now</button>}
+              <button className="secondary full" onClick={() => { setPhase("choose"); setTask(""); setError(""); }}>Record again</button>
+              <button className="primary full" onClick={useInChat}>Add to chat</button>
             </div>
           </>
         )}

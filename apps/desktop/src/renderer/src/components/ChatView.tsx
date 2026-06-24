@@ -131,7 +131,9 @@ export function ChatView({
   automationTask,
   alwaysAllow,
   onAlwaysAllowChange,
-  onSaveRoutine
+  onSaveRoutine,
+  onRerun,
+  composerSeed
 }: {
   turns: ChatTurn[];
   streaming: boolean;
@@ -146,6 +148,8 @@ export function ChatView({
   alwaysAllow: boolean;
   onAlwaysAllowChange: (value: boolean) => void;
   onSaveRoutine?: () => void;
+  onRerun?: () => void;
+  composerSeed?: { text: string; nonce: number };
 }) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -156,6 +160,8 @@ export function ChatView({
   const [voiceNote, setVoiceNote] = useState("");
   const dictationRef = useRef<Dictation | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const prevTurnsRef = useRef(0);
   // Show the conversation layout once there are chat turns OR an automation is
   // running/has run, so an automation started from the empty state unfolds in
   // place rather than leaving the user on the greeting screen.
@@ -205,6 +211,30 @@ export function ChatView({
     if (!streaming) composerRef.current?.focus();
   }, [streaming]);
 
+  // Drop seeded text (for example a just-recorded task) into the composer so the
+  // user can review, edit, and run it from the chat. Keyed on a nonce so the same
+  // text can be re-seeded. The user then presses Send (or refines first).
+  useEffect(() => {
+    if (composerSeed && composerSeed.text) {
+      setDraft(composerSeed.text);
+      composerRef.current?.focus();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composerSeed?.nonce]);
+
+  // Keep the latest content in view, but only when the user is already at (or
+  // near) the bottom. If they have scrolled up to read older messages, leave
+  // their position alone so they can actually scroll. A big jump in message count
+  // (opening a conversation, or sending a new message) always scrolls to the end.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const jumped = turns.length === 0 || prevTurnsRef.current === 0 || turns.length - prevTurnsRef.current > 1;
+    prevTurnsRef.current = turns.length;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+    if (jumped || nearBottom) el.scrollTop = el.scrollHeight;
+  }, [turns, streaming, runner.steps.length, runner.summary, runner.running]);
+
   // A bad file should not leave a stuck banner. Clear the attachment error on its
   // own after a few seconds (and whenever it changes), so it quietly goes away
   // instead of lingering into the next message or a new chat.
@@ -242,6 +272,36 @@ export function ChatView({
       });
       return [...current, ...chips];
     });
+  }
+
+  // Paste an image straight from the clipboard (for example a screenshot taken
+  // with the snipping tool). The main process reads the OS clipboard image and
+  // uploads it, so a copied image can be pasted into the chat with Ctrl+V.
+  function pasteImageFromClipboard() {
+    const id = localId();
+    setAttachError("");
+    setAttachments((current) => [...current, { id, filename: "Pasted image", status: "uploading" }]);
+    window.workcrew.attachments.pasteImage()
+      .then((ref) => {
+        setAttachments((list) => list.map((item) =>
+          item.id === id ? (ref ? { ...item, status: "ready", ref, filename: ref.filename || "Pasted image" } : { ...item, status: "error" }) : item
+        ));
+        if (!ref) setAttachError("That image could not be pasted. Try copying it again.");
+      })
+      .catch((error) => {
+        setAttachments((list) => list.map((item) => (item.id === id ? { ...item, status: "error" } : item)));
+        setAttachError(friendlyFileError(error));
+      });
+  }
+
+  function onPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (streaming) return;
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    const hasImage = Array.from(items).some((item) => item.kind === "file" && item.type.startsWith("image/"));
+    if (!hasImage) return; // let normal text paste happen
+    event.preventDefault();
+    pasteImageFromClipboard();
   }
 
   async function pickFiles() {
@@ -284,7 +344,9 @@ export function ChatView({
 
   function submit(text: string) {
     const trimmed = text.trim();
-    if ((!trimmed && readyRefs.length === 0) || streaming || uploading) return;
+    // Block while a chat is streaming, files are uploading, or an automation is
+    // running, so a message is never silently dropped against a busy engine.
+    if ((!trimmed && readyRefs.length === 0) || streaming || uploading || runner.running) return;
     onSend(trimmed, readyRefs);
     setDraft("");
     setAttachments([]);
@@ -298,7 +360,7 @@ export function ChatView({
     }
   }
 
-  const canSend = (draft.trim().length > 0 || readyRefs.length > 0) && !uploading;
+  const canSend = (draft.trim().length > 0 || readyRefs.length > 0) && !uploading && !runner.running;
 
   const composer = (
     <div
@@ -327,6 +389,7 @@ export function ChatView({
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={onKeyDown}
+        onPaste={onPaste}
         placeholder="Ask WorkCrew anything..."
         rows={hasConversation ? 1 : 3}
       />
@@ -416,9 +479,9 @@ export function ChatView({
 
   return (
     <div className="chat-active">
-      <div className="chat-scroll">
+      <div className="chat-scroll" ref={scrollRef}>
         <MessageList turns={turns} streaming={streaming} />
-        <AutomationActivity runner={runner} task={automationTask} onSaveRoutine={onSaveRoutine} />
+        <AutomationActivity runner={runner} task={automationTask} onSaveRoutine={onSaveRoutine} onRerun={onRerun} />
       </div>
       <div className="composer-dock">{composer}{aux}</div>
     </div>

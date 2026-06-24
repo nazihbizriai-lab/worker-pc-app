@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import type { AutomationAction, ModelTier } from "@workcrew/contracts";
 import { actionDetail, actionLabel } from "../lib/automation";
-import { actionNeedsApproval, redactResult } from "../security";
+import { redactResult, requiresApproval } from "../security";
 import { addHistory } from "../lib/storage";
 import { buildRecipe, getRecipe, isReplayEnabled, normalizeTaskKey, saveRecipe, type Recipe } from "../lib/recipes";
 
@@ -41,6 +41,7 @@ export type AutomationRunner = {
   stop: () => void;
   clear: () => void;
   setAutoApprove: (value: boolean) => void;
+  setPermissions: (permissions: Record<string, boolean>) => void;
 };
 
 export function useAutomationRunner(): AutomationRunner {
@@ -57,6 +58,18 @@ export function useAutomationRunner(): AutomationRunner {
   const autoApproveRef = useRef(false);
   function setAutoApprove(value: boolean): void {
     autoApproveRef.current = value;
+  }
+  // The per-category Permissions toggles. A category left on can be covered by
+  // "Always allow"; a category turned off keeps asking. Held in a ref so the
+  // approval decision always sees the latest settings mid-run.
+  const permissionsRef = useRef<Record<string, boolean>>({});
+  function setPermissions(permissions: Record<string, boolean>): void {
+    permissionsRef.current = permissions;
+  }
+  // Whether to show the in-app approval prompt for an action, given current
+  // settings. Centralized so the model loop and recipe replay decide identically.
+  function shouldPrompt(action: AutomationAction): boolean {
+    return requiresApproval(action, { alwaysAllow: autoApproveRef.current, permissions: permissionsRef.current });
   }
 
   // While a Windows automation physically uses the mouse/keyboard, show an
@@ -125,7 +138,7 @@ export function useAutomationRunner(): AutomationRunner {
 
       // Re-derive approval from the action itself rather than trusting the stored
       // flag (a tampered recipe could lie); shell is gated by the main process.
-      if (actionNeedsApproval(action) && action.kind !== "shell" && !autoApproveRef.current) {
+      if (shouldPrompt(action)) {
         const approved = await requestApproval(action);
         if (!approved) {
           setSteps((current) => current.map((item) => (item.id === id ? { ...item, status: "declined" } : item)));
@@ -228,9 +241,9 @@ export function useAutomationRunner(): AutomationRunner {
 
         // Shell commands are approved by the main process itself (a native prompt
         // that cannot be bypassed), so they are not prompted again here. Other
-        // writes use the in-app approval unless Always allow is on.
-        const mustApprove = actionNeedsApproval(action) && action.kind !== "shell" && !autoApproveRef.current;
-        if (mustApprove) {
+        // writes use the in-app approval based on Always allow and the per-category
+        // Permissions toggles.
+        if (shouldPrompt(action)) {
           const approved = await requestApproval(action);
           if (!approved) {
             recordEntry.ok = false;
@@ -279,5 +292,5 @@ export function useAutomationRunner(): AutomationRunner {
     }
   }
 
-  return { steps, status, summary, error, label, pending, run, decide, stop, clear, setAutoApprove, running: status === "running" };
+  return { steps, status, summary, error, label, pending, run, decide, stop, clear, setAutoApprove, setPermissions, running: status === "running" };
 }
