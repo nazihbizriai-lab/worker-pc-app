@@ -46,8 +46,20 @@ SAFE_KEYS = {
     "pagedown": "{PGDN}",
     "backspace": "{BACKSPACE}",
     "delete": "{DELETE}",
+    "del": "{DELETE}",
     "space": "{SPACE}",
 }
+
+# pywinauto's type_keys treats ^ % + ~ ( ) { } as a keystroke language (Ctrl,
+# Alt, Shift, Enter, grouping). To type a value EXACTLY as given, each of those
+# characters is wrapped in braces, which pywinauto types as the literal
+# character. This guarantees type-text and type-keys produce plain text only,
+# never a hotkey or chord, and that values like "50% off" or "a+b" type verbatim.
+_TYPE_KEYS_META = set("^%+~(){}")
+
+
+def escape_for_type_keys(text: str) -> str:
+    return "".join("{" + ch + "}" if ch in _TYPE_KEYS_META else ch for ch in text)
 ALLOWED_COMMANDS = {
     "list-windows",
     "connect",
@@ -624,12 +636,10 @@ def execute_action(action: dict[str, Any]) -> str:
         if command == "type-text":
             # Type literal text into whatever is focused in the connected window
             # (for example the active spreadsheet cell after it is selected), with
-            # no control lookup. Braces are rejected so it can only ever produce
-            # plain text, never a key chord or hotkey.
+            # no control lookup. Every keystroke-language metacharacter is escaped,
+            # so the value can only ever produce plain text, never a chord/hotkey.
             value = optional_text(action.get("value"), MAX_TEXT_LENGTH) or ""
-            if re.search(r"[{}]", value):
-                raise ValueError("Special key sequences are not allowed")
-            require_window().type_keys(value, with_spaces=True, set_foreground=True)
+            require_window().type_keys(escape_for_type_keys(value), with_spaces=True, set_foreground=True)
             return "Typed text"
 
         selector = require_text(action.get("control"), "control")
@@ -643,13 +653,10 @@ def execute_action(action: dict[str, Any]) -> str:
             return f"Updated control {selector}"
         if command == "type-keys":
             value = optional_text(action.get("value"), MAX_TEXT_LENGTH) or ""
-            # pywinauto's type_keys interprets braces as special key sequences
-            # (for example {ENTER}, {VK_LWIN}, modifier chords). Rejecting any
-            # brace keeps model supplied text from triggering arbitrary key
-            # chords or hotkeys, so typing can only ever produce literal text.
-            if re.search(r"[{}]", value):
-                raise ValueError("Special key sequences are not allowed")
-            control.type_keys(value, with_spaces=True, set_foreground=True)
+            # Every keystroke-language metacharacter (^ % + ~ ( ) { }) is escaped to
+            # its literal form, so model-supplied text can only type literal text,
+            # never trigger a key chord or hotkey. Special keys go through press-key.
+            control.type_keys(escape_for_type_keys(value), with_spaces=True, set_foreground=True)
             return f"Typed into control {selector}"
         if command == "get-text":
             return str(control.window_text())[:MAX_TEXT_LENGTH]

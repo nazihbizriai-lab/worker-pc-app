@@ -234,25 +234,22 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(req.status, 404)
 
 
-class ExecuteActionTests(unittest.TestCase):
-    def test_type_keys_rejects_brace_sequences(self):
-        # type-keys with braces must be rejected before any desktop interaction,
-        # so this raises without touching pywinauto. We point STATE.window at a
-        # sentinel so require_window passes and find_control would be reached
-        # only after the brace guard.
-        original = agent.STATE.window
-        agent.STATE.window = object()
-        try:
-            with self.assertRaises(ValueError):
-                agent.execute_action({
-                    "kind": "windows",
-                    "command": "type-keys",
-                    "control": "field",
-                    "value": "{ENTER}",
-                })
-        finally:
-            agent.STATE.window = original
+class EscapeForTypeKeysTests(unittest.TestCase):
+    def test_escapes_keystroke_metacharacters_to_literal(self):
+        # Each pywinauto metacharacter is wrapped in braces so it types literally,
+        # never as a chord/hotkey, and ordinary values type verbatim.
+        self.assertEqual(agent.escape_for_type_keys("50% off"), "50{%} off")
+        self.assertEqual(agent.escape_for_type_keys("2+2"), "2{+}2")
+        self.assertEqual(agent.escape_for_type_keys("(note)"), "{(}note{)}")
+        self.assertEqual(agent.escape_for_type_keys("a~b"), "a{~}b")
+        self.assertEqual(agent.escape_for_type_keys("^s"), "{^}s")
+        self.assertEqual(agent.escape_for_type_keys("{ENTER}"), "{{}ENTER{}}")
 
+    def test_plain_text_is_unchanged(self):
+        self.assertEqual(agent.escape_for_type_keys("Hello World 123"), "Hello World 123")
+
+
+class ExecuteActionTests(unittest.TestCase):
     def test_commands_requiring_window_fail_without_connect(self):
         original = agent.STATE.window
         agent.STATE.window = None

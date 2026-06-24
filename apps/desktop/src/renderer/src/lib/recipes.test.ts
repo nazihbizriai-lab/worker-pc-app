@@ -107,17 +107,14 @@ describe("buildRecipe", () => {
     expect(recipe!.steps).toHaveLength(5);
   });
 
-  it("skips failed or declined actions so only the successful path is saved", () => {
-    const withFailure = [
-      { action: { kind: "windows", command: "connect", windowTitle: "Excel" } as AutomationAction, snapshot: null, ok: true },
-      // A failed click on a numeric control the snapshot cannot resolve would
-      // normally make the whole run unrecordable, but a failed step is skipped.
-      { action: { kind: "windows", command: "click", control: "999" } as AutomationAction, snapshot: SNAPSHOT, ok: false },
-      { action: { kind: "windows", command: "type-text", value: "1" } as AutomationAction, snapshot: null, ok: true }
+  it("collapses an adjacent identical repeated step", () => {
+    const dup = [
+      { action: { kind: "windows", command: "connect", windowTitle: "Excel" } as AutomationAction, snapshot: null },
+      { action: { kind: "windows", command: "type-text", value: "1" } as AutomationAction, snapshot: null },
+      { action: { kind: "windows", command: "type-text", value: "1" } as AutomationAction, snapshot: null }
     ];
-    const recipe = buildRecipe("x", withFailure, "");
-    expect(recipe).not.toBeNull();
-    expect(recipe!.steps).toHaveLength(2); // connect + type-text; the failed click dropped
+    const recipe = buildRecipe("x", dup, "");
+    expect(recipe!.steps).toHaveLength(2); // connect + one type-text; the duplicate dropped
   });
 });
 

@@ -120,6 +120,12 @@ export function useAutomationRunner(): AutomationRunner {
 
       try {
         showOverlayFor(action);
+        // type-text and press-key act on whatever is focused and do not wait on a
+        // control like other commands, so on fast replay give the app a brief
+        // moment to settle the focus the previous step set (e.g. a cell jump).
+        if (action.kind === "windows" && (action.command === "type-text" || action.command === "press-key")) {
+          await new Promise((settle) => setTimeout(settle, 150));
+        }
         await window.workcrew.automation.execute(action);
         setSteps((current) => current.map((item) => (item.id === id ? { ...item, status: "ok" } : item)));
       } catch {
@@ -242,9 +248,10 @@ export function useAutomationRunner(): AutomationRunner {
           outcome: current === "complete" ? "complete" : current === "stopped" ? "stopped" : "failed",
           activityCount: 0
         });
-        // Only a clean, fully-deterministic completed run becomes a recipe;
-        // buildRecipe returns null for anything that cannot be replayed safely.
-        if (current === "complete") {
+        // Only a clean, fully-deterministic completed run becomes a recipe. A run
+        // with any failed or declined step is never cached: dropping such a step
+        // could replay a path that silently skips a write yet reports success.
+        if (current === "complete" && !recorded.some((entry) => entry.ok === false)) {
           const recipe = buildRecipe(trimmed, recorded, finishSummary);
           if (recipe) saveRecipe(recipe);
         }

@@ -141,13 +141,13 @@ export function stabilizeAction(action: AutomationAction, snapshot: string | nul
 
 /**
  * Build a recipe from the actions executed during a successful run, each paired
- * with the snapshot that was current when it was chosen. Actions that failed or
- * were declined (ok === false) are skipped, so a recipe captures only the clean
- * successful path, not the model's wrong turns, which makes replay both faster
- * and more reliable. Returns null if any KEPT step cannot be made replay-stable,
- * so a partially-deterministic run is never recorded (replay must be all-or-
- * nothing safe). The trailing finish is dropped; replay completes after the last
- * concrete step.
+ * with the snapshot that was current when it was chosen. The CALLER must only
+ * pass a clean run (no failed or declined steps): dropping a failed step here
+ * could silently remove a write a later focus-relative step depended on, so that
+ * filtering is intentionally not done. Returns null if any step cannot be made
+ * replay-stable, so a partially-deterministic run is never recorded (replay must
+ * be all-or-nothing safe). An action identical to the one just before it is
+ * collapsed so replay never double-commits. The trailing finish is dropped.
  */
 export function buildRecipe(
   task: string,
@@ -156,12 +156,14 @@ export function buildRecipe(
 ): Recipe | null {
   if (recorded.length === 0) return null;
   const steps: RecipeStep[] = [];
-  for (const { action, snapshot, ok } of recorded) {
-    if (ok === false) continue; // skip a failed or declined action
+  for (const { action, snapshot } of recorded) {
     const stable = stabilizeAction(action, snapshot);
     if (!stable) return null;
     if (stable.kind === "finish") continue;
-    steps.push({ action: stable, needsApproval: actionNeedsApproval(stable) });
+    const step = { action: stable, needsApproval: actionNeedsApproval(stable) };
+    const prev = steps[steps.length - 1];
+    if (prev && JSON.stringify(prev.action) === JSON.stringify(step.action)) continue; // collapse a redundant repeat
+    steps.push(step);
   }
   if (steps.length === 0) return null;
   const now = Date.now();
