@@ -433,9 +433,26 @@ function registerIpc(): void {
     return { opened: true };
   });
 
-  // Run one shell command in the workspace. The renderer only sends this after the
-  // user has approved the exact command, so this just validates and runs it.
-  ipcMain.handle("shell:run", (_event, raw) => runShellCommand(shellActionSchema.parse(raw).command));
+  // Run one shell command in the workspace. The main process itself shows the
+  // approval here, so a command can never run without the user allowing the exact
+  // command, even if some other renderer code tried to call this directly.
+  ipcMain.handle("shell:run", async (_event, raw) => {
+    const { command } = shellActionSchema.parse(raw);
+    const target = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    const options = {
+      type: "warning" as const,
+      buttons: ["Cancel", "Run"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+      title: "Run a command?",
+      message: "WorkCrew wants to run a command on your computer.",
+      detail: `${command}\n\nThis runs in WorkCrew's workspace folder. Only allow commands you understand and trust.`
+    };
+    const { response } = target ? await dialog.showMessageBox(target, options) : await dialog.showMessageBox(options);
+    if (response !== 1) return "The user declined to run this command.";
+    return runShellCommand(command);
+  });
 
   ipcMain.handle("automation:browser", (_event, action) => browserCli.execute(action));
   ipcMain.handle("automation:windows", (_event, action) => windowsAgent.execute(action));
