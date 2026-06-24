@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { PLAN_CATALOG, type PlanId } from "@workcrew/contracts";
+import { PLAN_CATALOG, TOKEN_PACKS, tokenPackGrant, tokenPackIdSchema, type PlanId, type TokenPackId } from "@workcrew/contracts";
+import { config } from "./config.js";
 import {
   addReferralEarned,
   claimReferralCredit,
@@ -8,6 +9,11 @@ import {
   getUserByReferralCode,
   type SubscriptionRow
 } from "./db.js";
+
+// Dollars are tracked internally as microdollars (millionths of a dollar), and a
+// microdollar is shown to the user as one token. So one dollar charged equals one
+// million tokens of value.
+const MICRODOLLARS_PER_USD = 1_000_000;
 
 export type BudgetWindow = { startMs: number; endMs: number };
 
@@ -106,15 +112,26 @@ export async function reserveBudget(input: {
   // A per-user transaction-scoped advisory lock serializes reservations for one
   // user so the second sees the first's row. SQLite (tests) has a single writer,
   // so the plain insert is already safe there.
-  let rowsAffected: number;
-  if (client.dialect === "postgres") {
-    const results = await client.batch([
-      { sql: "SELECT pg_advisory_xact_lock(hashtext(?))", args: [input.subscription.userId] },
-      insert
-    ]);
-    rowsAffected = results[1]?.rowsAffected ?? 0;
-  } else {
-    rowsAffected = (await client.execute(insert)).rowsAffected;
+  async function runInsert(): Promise<number> {
+    if (client.dialect === "postgres") {
+      const results = await client.batch([
+        { sql: "SELECT pg_advisory_xact_lock(hashtext(?))", args: [input.subscription.userId] },
+        insert
+      ]);
+      return results[1]?.rowsAffected ?? 0;
+    }
+    return (await client.execute(insert)).rowsAffected;
+  }
+
+  let rowsAffected = await runInsert();
+
+  // The plan allowance is exhausted. If auto-reload is on (and under its cap and
+  // billing succeeds), add a top-up pack and try the reservation once more, so a
+  // run keeps going without the user being interrupted. At most one auto charge
+  // happens per reservation.
+  if (rowsAffected !== 1) {
+    const reloaded = await maybeAutoReload(input.subscription, window, nowMs);
+    if (reloaded) rowsAffected = await runInsert();
   }
 
   if (rowsAffected !== 1) {
@@ -143,6 +160,112 @@ export async function releaseBudget(reservationId: string): Promise<void> {
     sql: "UPDATE usage_ledger SET status = 'released', settled_at_ms = ? WHERE id = ? AND status = 'reserved'",
     args: [Date.now(), reservationId]
   });
+}
+
+// The money charged for a pack, in microdollars, for receipts and the spend cap.
+export function tokenPackCharge(pack: TokenPackId): number {
+  return TOKEN_PACKS[pack].priceUsd * MICRODOLLARS_PER_USD;
+}
+
+/**
+ * Add purchased tokens to the user's CURRENT budget window as a settled credit,
+ * exactly like the referral credit: a negative-cost row lowers the window's used
+ * total, freeing that many tokens for this period. The money charged is stored in
+ * reserved_microdollars on the same settled row purely as a record; the
+ * reservation cap reads `actual` on settled rows, so this never affects it.
+ */
+export async function grantTokenCredit(input: {
+  userId: string;
+  grantedMicrodollars: number;
+  chargedMicrodollars: number;
+  source: "token_topup" | "auto_reload";
+  providerRequestId?: string;
+  nowMs?: number;
+}): Promise<{ window: BudgetWindow } | null> {
+  const nowMs = input.nowMs ?? Date.now();
+  const subscription = await getSubscription(input.userId);
+  if (!subscription) return null;
+  const window = getBudgetWindow(subscription.budgetAnchorMs, nowMs);
+  await client.execute({
+    sql: `INSERT INTO usage_ledger(
+        id, user_id, run_id, period_start_ms, period_end_ms, model,
+        reserved_microdollars, actual_microdollars, status, provider_request_id, created_at_ms, settled_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'settled', ?, ?, ?)`,
+    args: [
+      randomUUID(),
+      input.userId,
+      input.source,
+      window.startMs,
+      window.endMs,
+      input.source,
+      Math.max(0, Math.round(input.chargedMicrodollars)),
+      -Math.abs(Math.round(input.grantedMicrodollars)),
+      input.providerRequestId ?? null,
+      nowMs,
+      nowMs
+    ]
+  });
+  return { window };
+}
+
+// Top-up totals for the current period, in token (usage) units. `purchased` is
+// every top-up token added this period (manual and automatic); `autoReloaded` is
+// only the automatic ones, which the monthly auto-reload cap is measured against.
+export async function getTopupThisPeriod(userId: string, window: BudgetWindow): Promise<{ purchased: number; autoReloaded: number }> {
+  const result = await client.execute({
+    sql: `SELECT
+        COALESCE(SUM(-actual_microdollars), 0) AS purchased,
+        COALESCE(SUM(CASE WHEN model = 'auto_reload' THEN -actual_microdollars ELSE 0 END), 0) AS auto_reloaded
+      FROM usage_ledger
+      WHERE user_id = ? AND period_start_ms = ? AND period_end_ms = ?
+        AND status = 'settled' AND model IN ('token_topup', 'auto_reload')`,
+    args: [userId, window.startMs, window.endMs]
+  });
+  const row = result.rows[0];
+  return { purchased: Number(row?.purchased ?? 0), autoReloaded: Number(row?.auto_reloaded ?? 0) };
+}
+
+function parsePack(value: string): TokenPackId {
+  const parsed = tokenPackIdSchema.safeParse(value);
+  return parsed.success ? parsed.data : "small";
+}
+
+/**
+ * When the plan allowance is exhausted, automatically add one top-up pack if the
+ * user has turned auto-reload on and the period is still under its token cap. In
+ * simulated billing there is no charge; in live billing an off-session charge is
+ * made against the saved card first, and tokens are granted only if it succeeds.
+ * Returns true when tokens were granted (the caller then retries the reservation).
+ */
+export async function maybeAutoReload(subscription: SubscriptionRow, window: BudgetWindow, nowMs: number): Promise<boolean> {
+  if (!subscription.autoReloadEnabled) return false;
+  const limit = subscription.monthlyTopupLimitMicro;
+  if (limit <= 0) return false;
+
+  const pack = parsePack(subscription.autoReloadPack);
+  const grant = tokenPackGrant(pack);
+  const { autoReloaded } = await getTopupThisPeriod(subscription.userId, window);
+  // Never exceed the period cap on automatic spending.
+  if (autoReloaded + grant > limit) return false;
+
+  const charged = tokenPackCharge(pack);
+  if (config.billingMode === "stripe") {
+    // A saved card is required to charge off-session. Without one, auto-reload
+    // quietly does nothing (the app prompts the user to add a payment method).
+    if (!subscription.stripePaymentMethodId || !subscription.stripeCustomerId) return false;
+    const { chargeAutoReload } = await import("./billing.js");
+    const ok = await chargeAutoReload(subscription, pack);
+    if (!ok) return false;
+  }
+
+  await grantTokenCredit({
+    userId: subscription.userId,
+    grantedMicrodollars: grant,
+    chargedMicrodollars: charged,
+    source: "auto_reload",
+    nowMs
+  });
+  return true;
 }
 
 /**

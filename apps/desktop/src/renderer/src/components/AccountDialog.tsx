@@ -14,13 +14,15 @@ export function AccountDialog({
   usedMicrodollars,
   onClose,
   onSignOut,
-  onAdjustPlan
+  onAdjustPlan,
+  onAddTokens
 }: {
   entitlement: SubscriptionState;
   usedMicrodollars: number;
   onClose: () => void;
   onSignOut: () => Promise<void>;
   onAdjustPlan: (plan: PlanId, interval: BillingInterval) => Promise<void>;
+  onAddTokens: () => void;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const [busy, setBusy] = useState<"adjust" | "signout" | null>(null);
@@ -100,6 +102,13 @@ export function AccountDialog({
           <div className="account-usage-foot">
             <span>{formatTokens(used)} used of {formatTokens(budget)}</span>
             <span>Resets {formatDate(entitlement.budgetPeriodEnd)}</span>
+          </div>
+          {entitlement.purchasedMicrodollars > 0 && (
+            <p className="account-usage-extra">Includes {formatTokens(entitlement.purchasedMicrodollars)} extra tokens you added this period.</p>
+          )}
+          <div className="account-tokens-row">
+            <button type="button" className="secondary" onClick={onAddTokens}>Add tokens</button>
+            {entitlement.autoReloadEnabled && <span className="account-autoreload">Auto-reload on</span>}
           </div>
         </div>
 

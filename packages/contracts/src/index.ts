@@ -54,6 +54,34 @@ export const PLAN_CATALOG = {
   devices: number;
 }>;
 
+// One-time token top-up packs. When the monthly allowance runs low the user can
+// add more tokens to keep working in the current period. Larger packs include a
+// bonus (the "save more" framing) delivered as extra tokens, never as a money
+// discount, so the whole feature can stay in tokens and never name a provider.
+//   tokensMicrodollars  base tokens (internal usage units, shown 1:1 as tokens)
+//   bonusPercent        extra tokens granted on top of the base, for larger packs
+//   priceUsd            representative price; the live charge is set in Stripe
+// grantedTokens(pack) = tokensMicrodollars * (1 + bonusPercent / 100)
+export const tokenPackIdSchema = z.enum(["small", "medium", "large"]);
+export type TokenPackId = z.infer<typeof tokenPackIdSchema>;
+
+export const TOKEN_PACKS = {
+  small: { id: "small", tokensMicrodollars: 5_000_000, bonusPercent: 0, priceUsd: 19 },
+  medium: { id: "medium", tokensMicrodollars: 15_000_000, bonusPercent: 10, priceUsd: 49 },
+  large: { id: "large", tokensMicrodollars: 40_000_000, bonusPercent: 20, priceUsd: 119 }
+} as const satisfies Record<TokenPackId, {
+  id: TokenPackId;
+  tokensMicrodollars: number;
+  bonusPercent: number;
+  priceUsd: number;
+}>;
+
+// Total tokens granted by a pack, including its bonus, in internal usage units.
+export function tokenPackGrant(pack: TokenPackId): number {
+  const item = TOKEN_PACKS[pack];
+  return Math.round(item.tokensMicrodollars * (1 + item.bonusPercent / 100));
+}
+
 export const modelTierSchema = z.enum(["auto", "haiku", "sonnet", "opus"]);
 export type ModelTier = z.infer<typeof modelTierSchema>;
 
@@ -192,6 +220,22 @@ export const createCheckoutSchema = z.object({
   interval: billingIntervalSchema
 }).strict();
 
+// Buy a one-time token pack.
+export const topupSchema = z.object({
+  pack: tokenPackIdSchema
+}).strict();
+export type TopupRequest = z.infer<typeof topupSchema>;
+
+// Auto-reload: when the remaining tokens run low, automatically add a pack, up to
+// a monthly spend cap (in internal usage units). monthlyLimitMicrodollars of 0
+// means no automatic spending is allowed (the safe default).
+export const autoReloadSettingsSchema = z.object({
+  enabled: z.boolean(),
+  pack: tokenPackIdSchema,
+  monthlyLimitMicrodollars: z.number().int().min(0).max(1_000_000_000)
+}).strict();
+export type AutoReloadSettings = z.infer<typeof autoReloadSettingsSchema>;
+
 export const createRunSchema = z.object({
   task: z.string().trim().min(3).max(20_000),
   model: modelTierSchema.default("auto")
@@ -218,6 +262,17 @@ export type SubscriptionState = {
   budgetMicrodollars: number;
   usedMicrodollars: number;
   reservedMicrodollars: number;
+  // Token top-up and auto-reload state. purchasedMicrodollars is the extra tokens
+  // bought this period (added on top of the plan allowance). topupSpentMicrodollars
+  // is what has been spent on top-ups this period, measured against the
+  // monthlyTopupLimitMicrodollars cap. hasPaymentMethod is true once a card is on
+  // file (required before auto-reload can charge in live billing).
+  purchasedMicrodollars: number;
+  topupSpentMicrodollars: number;
+  monthlyTopupLimitMicrodollars: number;
+  autoReloadEnabled: boolean;
+  autoReloadPack: TokenPackId;
+  hasPaymentMethod: boolean;
 };
 
 export type RunStepResponse = {

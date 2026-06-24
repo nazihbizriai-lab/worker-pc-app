@@ -17,7 +17,11 @@ function makeSubscription(): SubscriptionRow {
     status: "active",
     active: true,
     budgetAnchorMs: Date.now(),
-    currentPeriodEndMs: Date.now() + 30 * 24 * 60 * 60 * 1000
+    currentPeriodEndMs: Date.now() + 30 * 24 * 60 * 60 * 1000,
+    autoReloadEnabled: false,
+    autoReloadPack: "small",
+    monthlyTopupLimitMicro: 0,
+    stripePaymentMethodId: null
   };
 }
 

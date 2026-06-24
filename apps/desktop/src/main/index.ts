@@ -12,6 +12,8 @@ import {
   createCheckoutSchema,
   createRunSchema,
   nextRunStepSchema,
+  topupSchema,
+  autoReloadSettingsSchema,
   type RecordedEvent,
   type ChatDeltaFrame
 } from "@workcrew/contracts";
@@ -313,6 +315,18 @@ function registerIpc(): void {
     await shell.openExternal(result.url);
     return { opened: true };
   });
+  // Buy a one-time token pack. In live billing the backend returns a Checkout URL
+  // to open in the browser; in simulated billing it returns the refreshed
+  // entitlement directly, which is passed straight back to the renderer.
+  ipcMain.handle("api:topup", async (_event, raw) => {
+    const result = await api.request<{ url?: string }>("/v1/billing/topup", { method: "POST", body: topupSchema.parse(raw) });
+    if (result && typeof result.url === "string") {
+      await shell.openExternal(result.url);
+      return { opened: true };
+    }
+    return result;
+  });
+  ipcMain.handle("api:auto-reload", (_event, raw) => api.request("/v1/billing/auto-reload", { method: "POST", body: autoReloadSettingsSchema.parse(raw) }));
   ipcMain.handle("api:create-run", (_event, raw) => api.request("/v1/runs", { method: "POST", body: createRunSchema.parse(raw) }));
   ipcMain.handle("api:next-run", (_event, runId, raw) => {
     const safeRunId = z.string().uuid().parse(runId);

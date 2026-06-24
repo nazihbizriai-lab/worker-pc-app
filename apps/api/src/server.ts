@@ -9,11 +9,14 @@ import {
   REFERRAL_BONUS_MICRODOLLARS,
   REFERRAL_LINK_BASE,
   attachmentUploadSchema,
+  autoReloadSettingsSchema,
   chatSendSchema,
   createCheckoutSchema,
   createRunSchema,
   nextRunStepSchema,
   summarizeRecordingRequestSchema,
+  tokenPackGrant,
+  topupSchema,
   type ConversationSummary,
   type ReferralInfo,
   type RunStepResponse,
@@ -44,9 +47,9 @@ import {
   summarizeRecording
 } from "./anthropic.js";
 import { processAndStoreAttachment } from "./attachments.js";
-import { changePlan, createCheckout, createPortal, handleStripeWebhook } from "./billing.js";
+import { changePlan, createCheckout, createPortal, createTopupCheckout, handleStripeWebhook } from "./billing.js";
 import { landingPage } from "./landing.js";
-import { creditReferralOnPayment, getBudgetUsage, getBudgetWindow, planBudget, reserveBudget, settleBudget } from "./budget.js";
+import { creditReferralOnPayment, getBudgetUsage, getBudgetWindow, getTopupThisPeriod, grantTokenCredit, planBudget, reserveBudget, settleBudget, tokenPackCharge } from "./budget.js";
 import { streamChat } from "./chat.js";
 import { config } from "./config.js";
 import {
@@ -62,6 +65,7 @@ import {
   getUserById,
   initializeDatabase,
   listConversations,
+  setAutoReloadConfig,
   updateRun,
   type SubscriptionRow
 } from "./db.js";
@@ -133,11 +137,23 @@ async function subscriptionState(userId: string): Promise<SubscriptionState> {
       budgetPeriodEnd: null,
       budgetMicrodollars: 0,
       usedMicrodollars: 0,
-      reservedMicrodollars: 0
+      reservedMicrodollars: 0,
+      purchasedMicrodollars: 0,
+      topupSpentMicrodollars: 0,
+      monthlyTopupLimitMicrodollars: 0,
+      autoReloadEnabled: false,
+      autoReloadPack: "small",
+      hasPaymentMethod: false
     };
   }
   const window = getBudgetWindow(subscription.budgetAnchorMs);
-  const usage = await getBudgetUsage(userId, window);
+  const [usage, topup] = await Promise.all([
+    getBudgetUsage(userId, window),
+    getTopupThisPeriod(userId, window)
+  ]);
+  // Purchased top-up tokens lower the period's used total (they are settled credit
+  // rows). Add them back into the reported "used" so the user sees the real model
+  // usage, with the purchased tokens shown separately as extra allowance.
   return {
     active: subscription.active && subscription.currentPeriodEndMs > Date.now(),
     plan: subscription.plan,
@@ -146,9 +162,15 @@ async function subscriptionState(userId: string): Promise<SubscriptionState> {
     currentPeriodEnd: new Date(subscription.currentPeriodEndMs).toISOString(),
     budgetPeriodStart: new Date(window.startMs).toISOString(),
     budgetPeriodEnd: new Date(window.endMs).toISOString(),
-    budgetMicrodollars: planBudget(subscription.plan),
-    usedMicrodollars: usage.used,
-    reservedMicrodollars: usage.reserved
+    budgetMicrodollars: planBudget(subscription.plan) + topup.purchased,
+    usedMicrodollars: usage.used + topup.purchased,
+    reservedMicrodollars: usage.reserved,
+    purchasedMicrodollars: topup.purchased,
+    topupSpentMicrodollars: topup.autoReloaded,
+    monthlyTopupLimitMicrodollars: subscription.monthlyTopupLimitMicro,
+    autoReloadEnabled: subscription.autoReloadEnabled,
+    autoReloadPack: (["small", "medium", "large"] as const).includes(subscription.autoReloadPack as "small") ? (subscription.autoReloadPack as "small" | "medium" | "large") : "small",
+    hasPaymentMethod: Boolean(subscription.stripePaymentMethodId)
   };
 }
 
@@ -372,6 +394,39 @@ app.post("/v1/billing/change-plan", async (request) => {
 });
 
 app.post("/v1/billing/portal", async (request) => ({ url: await createPortal(await authenticate(request)) }));
+
+// Buy a one-time token pack. In live billing this returns a hosted Stripe
+// Checkout URL the app opens; in simulated billing it grants the tokens with no
+// charge and returns the refreshed entitlement, so the whole flow is testable.
+app.post("/v1/billing/topup", async (request) => {
+  const userId = await authenticate(request);
+  requireActive(await getSubscription(userId));
+  const body = topupSchema.parse(request.body);
+  if (config.billingMode === "stripe") {
+    return { url: await createTopupCheckout(userId, body.pack) };
+  }
+  await grantTokenCredit({
+    userId,
+    grantedMicrodollars: tokenPackGrant(body.pack),
+    chargedMicrodollars: tokenPackCharge(body.pack),
+    source: "token_topup"
+  });
+  return subscriptionState(userId);
+});
+
+// Save auto-reload preferences (enable/disable, which pack, and the per-period
+// token cap on automatic spending). Returns the refreshed entitlement.
+app.post("/v1/billing/auto-reload", async (request) => {
+  const userId = await authenticate(request);
+  requireActive(await getSubscription(userId));
+  const body = autoReloadSettingsSchema.parse(request.body);
+  await setAutoReloadConfig(userId, {
+    enabled: body.enabled,
+    pack: body.pack,
+    monthlyLimitMicro: body.monthlyLimitMicrodollars
+  });
+  return subscriptionState(userId);
+});
 
 app.post("/v1/billing/webhook", { config: { rawBody: true } }, async (request, reply) => {
   const signature = request.headers["stripe-signature"];

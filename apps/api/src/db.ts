@@ -22,6 +22,14 @@ export type SubscriptionRow = {
   active: boolean;
   budgetAnchorMs: number;
   currentPeriodEndMs: number;
+  /** Auto-reload settings. Managed separately from the Stripe webhook upsert so a
+   * subscription sync never clobbers them. monthlyTopupLimitMicro is the cap on
+   * automatic top-up spend per period (0 means auto-reload is not allowed to
+   * spend). stripePaymentMethodId is the saved card used for off-session charges. */
+  autoReloadEnabled: boolean;
+  autoReloadPack: string;
+  monthlyTopupLimitMicro: number;
+  stripePaymentMethodId: string | null;
   /** Referral bonus earned by this user (added to their monthly budget). Joined
    * from the users table on read; optional because it is not part of the
    * writable subscription row (upsert ignores it). */
@@ -84,6 +92,10 @@ export async function initializeDatabase(db: DatabaseClient = client): Promise<v
       active INTEGER NOT NULL DEFAULT 0,
       budget_anchor_ms BIGINT NOT NULL,
       current_period_end_ms BIGINT NOT NULL,
+      auto_reload_enabled INTEGER NOT NULL DEFAULT 0,
+      auto_reload_pack TEXT NOT NULL DEFAULT 'small',
+      monthly_topup_limit_micro BIGINT NOT NULL DEFAULT 0,
+      stripe_payment_method_id TEXT,
       updated_at_ms BIGINT NOT NULL
     )`,
     `CREATE TABLE IF NOT EXISTS usage_ledger (
@@ -240,6 +252,11 @@ export async function initializeDatabase(db: DatabaseClient = client): Promise<v
   await addColumnIfMissing(db, "users", "referred_by_code", "TEXT");
   await addColumnIfMissing(db, "users", "referred_credited", "INTEGER NOT NULL DEFAULT 0");
   await addColumnIfMissing(db, "users", "referral_bonus_microdollars", "BIGINT NOT NULL DEFAULT 0");
+  // Token top-up and auto-reload columns on existing subscription rows.
+  await addColumnIfMissing(db, "subscriptions", "auto_reload_enabled", "INTEGER NOT NULL DEFAULT 0");
+  await addColumnIfMissing(db, "subscriptions", "auto_reload_pack", "TEXT NOT NULL DEFAULT 'small'");
+  await addColumnIfMissing(db, "subscriptions", "monthly_topup_limit_micro", "BIGINT NOT NULL DEFAULT 0");
+  await addColumnIfMissing(db, "subscriptions", "stripe_payment_method_id", "TEXT");
   // Created after the column migration so it also applies to databases whose
   // users table predates the referral columns. Multiple NULL codes are allowed
   // by both SQLite and Postgres, so legacy rows without a code do not collide.
@@ -289,6 +306,10 @@ function mapSubscription(row: Record<string, unknown>): SubscriptionRow {
     active: asNumber(row.active) === 1,
     budgetAnchorMs: asNumber(row.budget_anchor_ms),
     currentPeriodEndMs: asNumber(row.current_period_end_ms),
+    autoReloadEnabled: asNumber(row.auto_reload_enabled) === 1,
+    autoReloadPack: row.auto_reload_pack ? String(row.auto_reload_pack) : "small",
+    monthlyTopupLimitMicro: asNumber(row.monthly_topup_limit_micro),
+    stripePaymentMethodId: row.stripe_payment_method_id ? String(row.stripe_payment_method_id) : null,
     referralBonusMicrodollars: asNumber(row.referral_bonus_microdollars)
   };
 }
@@ -315,7 +336,16 @@ export async function getSubscriptionByStripeId(subscriptionId: string): Promise
   return row ? mapSubscription(row as unknown as Record<string, unknown>) : null;
 }
 
-export async function upsertSubscription(input: SubscriptionRow): Promise<void> {
+// The Stripe webhook and the simulated provider write the subscription identity
+// and budget window. They never touch the auto-reload settings or the saved
+// payment method, so a subscription sync cannot clobber a user's auto-reload
+// configuration. Those columns are managed by setAutoReloadConfig/setPaymentMethod.
+type SubscriptionUpsert = Omit<
+  SubscriptionRow,
+  "autoReloadEnabled" | "autoReloadPack" | "monthlyTopupLimitMicro" | "stripePaymentMethodId" | "referralBonusMicrodollars"
+>;
+
+export async function upsertSubscription(input: SubscriptionUpsert): Promise<void> {
   await client.execute({
     sql: `INSERT INTO subscriptions (
       user_id, stripe_customer_id, stripe_subscription_id, plan, interval,
@@ -343,6 +373,28 @@ export async function upsertSubscription(input: SubscriptionRow): Promise<void> 
       input.currentPeriodEndMs,
       Date.now()
     ]
+  });
+}
+
+// Save the user's auto-reload preferences. A no-op if the user has no
+// subscription row yet (auto-reload only matters for an active subscriber).
+export async function setAutoReloadConfig(
+  userId: string,
+  config: { enabled: boolean; pack: string; monthlyLimitMicro: number }
+): Promise<void> {
+  await client.execute({
+    sql: `UPDATE subscriptions
+      SET auto_reload_enabled = ?, auto_reload_pack = ?, monthly_topup_limit_micro = ?, updated_at_ms = ?
+      WHERE user_id = ?`,
+    args: [config.enabled ? 1 : 0, config.pack, config.monthlyLimitMicro, Date.now(), userId]
+  });
+}
+
+// Record the saved Stripe payment method used for off-session auto-reload charges.
+export async function setPaymentMethod(userId: string, paymentMethodId: string | null): Promise<void> {
+  await client.execute({
+    sql: "UPDATE subscriptions SET stripe_payment_method_id = ?, updated_at_ms = ? WHERE user_id = ?",
+    args: [paymentMethodId, Date.now(), userId]
   });
 }
 

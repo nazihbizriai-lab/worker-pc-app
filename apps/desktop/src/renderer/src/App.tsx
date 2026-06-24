@@ -20,6 +20,9 @@ import { AccountDialog } from "./components/AccountDialog";
 import { InviteDialog } from "./components/InviteDialog";
 import { RecorderDialog } from "./components/RecorderDialog";
 import { ApprovalModal } from "./components/ApprovalModal";
+import { UsageBanner } from "./components/UsageBanner";
+import { AddTokensDialog } from "./components/AddTokensDialog";
+import { usageStatus } from "./lib/usage";
 import { useAutomationRunner } from "./hooks/useAutomationRunner";
 import {
   loadPermissions,
@@ -44,7 +47,13 @@ const EMPTY_ENTITLEMENT: SubscriptionState = {
   budgetPeriodEnd: null,
   budgetMicrodollars: 0,
   usedMicrodollars: 0,
-  reservedMicrodollars: 0
+  reservedMicrodollars: 0,
+  purchasedMicrodollars: 0,
+  topupSpentMicrodollars: 0,
+  monthlyTopupLimitMicrodollars: 0,
+  autoReloadEnabled: false,
+  autoReloadPack: "small",
+  hasPaymentMethod: false
 };
 
 // Turn any raw error into one plain sentence a non-technical person can act on.
@@ -356,7 +365,7 @@ function Paywall({ info, onActivated }: { info: AppInfo; onActivated: (state: Su
   );
 }
 
-function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { info: AppInfo; entitlement: SubscriptionState; onSignOut: () => Promise<void>; onUpgrade: () => Promise<void>; onAdjustPlan: (plan: PlanId, interval: BillingInterval) => Promise<void> }) {
+function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan, onEntitlement }: { info: AppInfo; entitlement: SubscriptionState; onSignOut: () => Promise<void>; onUpgrade: () => Promise<void>; onAdjustPlan: (plan: PlanId, interval: BillingInterval) => Promise<void>; onEntitlement: (state: SubscriptionState) => void }) {
   const [model, setModel] = useState<ModelTier>(DEFAULT_CHAT_MODEL);
   const [upgrading, setUpgrading] = useState(false);
   const [upgradeError, setUpgradeError] = useState("");
@@ -365,6 +374,7 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
   const [accountOpen, setAccountOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [recorderOpen, setRecorderOpen] = useState(false);
+  const [tokensOpen, setTokensOpen] = useState(false);
   const [permissions, setPermissions] = useState<PermissionState>(() => loadPermissions());
   const [routines, setRoutines] = useState<Routine[]>(() => loadRoutines());
   const [recents, setRecents] = useState<ConversationSummary[]>([]);
@@ -413,6 +423,9 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
   // latest value reported by a completed chat turn (done frame usage).
   const usage = usedTokens ?? entitlement.usedMicrodollars;
   const percent = Math.min(100, ((usage + entitlement.reservedMicrodollars) / entitlement.budgetMicrodollars) * 100 || 0);
+  // Token status drives the low/empty banner above the chat. It uses the live
+  // usage figure so it appears as soon as a turn pushes the user near the limit.
+  const usageState = usageStatus(entitlement, usage);
 
   // Load the Recents list. Failures are non-fatal: the chat surface still works
   // even if the conversations endpoint is unavailable.
@@ -681,6 +694,14 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
           </div>
         </header>
         {upgradeError && <div className="upgrade-error-bar" role="alert">{upgradeError}</div>}
+        {entitlement.active && (
+          <UsageBanner
+            status={usageState}
+            onAddTokens={() => setTokensOpen(true)}
+            onUpgrade={() => void handleUpgrade()}
+            upgrading={upgrading}
+          />
+        )}
         <ChatView
           turns={chat.turns}
           streaming={chat.streaming}
@@ -725,6 +746,15 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan }: { 
           onClose={() => setAccountOpen(false)}
           onSignOut={onSignOut}
           onAdjustPlan={onAdjustPlan}
+          onAddTokens={() => { setAccountOpen(false); setTokensOpen(true); }}
+        />
+      )}
+      {tokensOpen && (
+        <AddTokensDialog
+          entitlement={entitlement}
+          billingMode={info.billingMode}
+          onEntitlement={onEntitlement}
+          onClose={() => setTokensOpen(false)}
         />
       )}
       {inviteOpen && <InviteDialog onClose={() => setInviteOpen(false)} />}
@@ -798,6 +828,7 @@ export default function App() {
     <Workspace
       info={info}
       entitlement={entitlement}
+      onEntitlement={setEntitlement}
       onSignOut={async () => { await window.workcrew.auth.signOut(); setPhase("auth"); }}
       onUpgrade={async () => {
         if (info.billingMode === "simulated") {

@@ -568,7 +568,43 @@ select option:checked { background-color: var(--panel-2); }
 .account-usage .usage-track { height: 6px; }
 .account-usage-foot { display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; color: #79828f; font-size: 11px; }
 .account-buttons { display: grid; gap: 10px; margin-top: 20px; }
+.account-usage-extra { margin: 12px 0 0; color: var(--accent-soft); font-size: 11px; line-height: 1.45; }
+.account-tokens-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.account-tokens-row .secondary { padding: 8px 14px; font-size: 12px; }
+.account-autoreload { color: #4caf7d; font-size: 11px; font-weight: 600; }
 .error-banner.inline { max-width: none; margin: 16px 0 0; }
+
+/* Usage banner above the chat: amber when low, red when out of tokens. */
+.usage-banner { position: relative; z-index: 1; display: flex; align-items: center; gap: 10px; width: min(720px, calc(100% - 64px)); margin: 12px auto 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: 11px; font-size: 12px; }
+.usage-banner-low { border-color: rgba(201,162,39,.5); background: rgba(201,162,39,.10); color: #e9d8a6; }
+.usage-banner-empty { border-color: rgba(217,138,147,.55); background: rgba(217,138,147,.12); color: #f0c0c6; }
+.usage-banner-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: currentColor; }
+.usage-banner-text { flex: 1; min-width: 0; line-height: 1.4; }
+.usage-banner-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.usage-banner-add, .usage-banner-upgrade { padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 700; border: 1px solid transparent; }
+.usage-banner-add { color: var(--accent-ink); background: var(--lime); }
+.usage-banner-upgrade { color: var(--text); background: transparent; border-color: currentColor; }
+.usage-banner-upgrade:disabled { opacity: .6; cursor: default; }
+
+/* Add-tokens modal: benefits, pack picker, and auto-reload controls. */
+.tokens-modal { width: min(460px, 100%); }
+.tokens-sub { margin: 0 0 14px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.tokens-benefits { margin: 0 0 16px; padding: 0; list-style: none; display: grid; gap: 7px; }
+.tokens-benefits li { position: relative; padding-left: 22px; color: #c6ccd4; font-size: 12px; line-height: 1.45; }
+.tokens-benefits li::before { content: ""; position: absolute; left: 4px; top: 6px; width: 9px; height: 5px; border-left: 2px solid var(--accent-soft); border-bottom: 2px solid var(--accent-soft); transform: rotate(-45deg); }
+.tokens-packs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
+.token-pack { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 16px 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); cursor: pointer; transition: border-color .15s, background .15s; }
+.token-pack:hover { border-color: var(--muted); }
+.token-pack-on { border-color: var(--accent); background: rgba(139,92,246,.10); }
+.token-pack strong { font-size: 16px; }
+.token-pack-unit { color: var(--muted); font-size: 11px; }
+.token-pack-badge { position: absolute; top: -8px; left: 50%; transform: translateX(-50%); white-space: nowrap; padding: 2px 7px; border-radius: 99px; background: var(--accent); color: #fff; font-size: 9px; font-weight: 700; }
+.auto-reload-block { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.tokens-auto { margin-top: 0; }
+.auto-reload-controls { margin-top: 12px; display: grid; gap: 6px; }
+.auto-reload-controls select { width: 100%; appearance: none; -webkit-appearance: none; margin-bottom: 6px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: var(--panel-2); font-size: 13px; cursor: pointer; }
+.auto-reload-controls .field-label { margin-bottom: 4px; }
+.tokens-portal { margin-top: 14px; }
 
 /* Click recorder dialog. */
 .recorder-choice { display: grid; gap: 10px; margin-top: 4px; }

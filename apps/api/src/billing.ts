@@ -1,12 +1,22 @@
 import Stripe from "stripe";
-import { PLAN_CATALOG, REFERRAL_BONUS_MICRODOLLARS, type BillingInterval, type PlanId } from "@workcrew/contracts";
+import {
+  PLAN_CATALOG,
+  REFERRAL_BONUS_MICRODOLLARS,
+  TOKEN_PACKS,
+  tokenPackGrant,
+  tokenPackIdSchema,
+  type BillingInterval,
+  type PlanId,
+  type TokenPackId
+} from "@workcrew/contracts";
 import { config } from "./config.js";
-import { creditReferralOnPayment } from "./budget.js";
+import { creditReferralOnPayment, grantTokenCredit, tokenPackCharge } from "./budget.js";
 import {
   getSubscription,
   getSubscriptionByStripeId,
   hasStripeEvent,
   recordStripeEvent,
+  setPaymentMethod,
   upsertSubscription,
   type SubscriptionRow
 } from "./db.js";
@@ -103,6 +113,68 @@ export async function changePlan(userId: string, plan: PlanId, interval: Billing
   await synchronizeSubscription(updated);
 }
 
+// Buy a one-time token pack via a hosted Stripe Checkout (mode=payment). The card
+// used is saved for future off-session auto-reload. A configured price is used
+// when present; otherwise an ad-hoc price is built from the pack catalog so the
+// flow works before the owner creates the Stripe prices.
+export async function createTopupCheckout(userId: string, pack: TokenPackId): Promise<string> {
+  const client = requireStripe();
+  const existing = await getSubscription(userId);
+  const customerId = existing?.stripeCustomerId ?? undefined;
+  const item = TOKEN_PACKS[pack];
+  const configuredPrice = config.stripeTopupPrices[pack];
+  const lineItem: Stripe.Checkout.SessionCreateParams.LineItem = configuredPrice
+    ? { price: configuredPrice, quantity: 1 }
+    : {
+        price_data: {
+          currency: "usd",
+          product_data: { name: "WorkCrew tokens" },
+          unit_amount: item.priceUsd * 100
+        },
+        quantity: 1
+      };
+
+  const session = await client.checkout.sessions.create({
+    mode: "payment",
+    customer: customerId,
+    ...(customerId ? { customer_update: { name: "auto" as const, address: "auto" as const } } : { customer_creation: "always" as const }),
+    client_reference_id: userId,
+    line_items: [lineItem],
+    // Save the card so auto-reload can charge it later without the user present.
+    payment_intent_data: { setup_future_usage: "off_session" },
+    billing_address_collection: "auto",
+    metadata: { workcrew_user_id: userId, workcrew_topup_pack: pack },
+    success_url: `${config.billingSuccessUrl}?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: config.billingCancelUrl
+  });
+
+  if (!session.url) throw new Error("Stripe did not return a Checkout URL");
+  return session.url;
+}
+
+// Charge the user's saved card for one auto-reload pack, off-session. Returns
+// true only when the charge succeeded; the caller grants the tokens. A decline or
+// an authentication requirement returns false and no tokens are added.
+export async function chargeAutoReload(subscription: SubscriptionRow, pack: TokenPackId): Promise<boolean> {
+  const client = requireStripe();
+  if (!subscription.stripeCustomerId || !subscription.stripePaymentMethodId) return false;
+  const item = TOKEN_PACKS[pack];
+  try {
+    const intent = await client.paymentIntents.create({
+      amount: item.priceUsd * 100,
+      currency: "usd",
+      customer: subscription.stripeCustomerId,
+      payment_method: subscription.stripePaymentMethodId,
+      off_session: true,
+      confirm: true,
+      metadata: { workcrew_user_id: subscription.userId, workcrew_topup_pack: pack, workcrew_auto_reload: "1" }
+    });
+    return intent.status === "succeeded";
+  } catch {
+    return false;
+  }
+}
+
 export async function createPortal(userId: string): Promise<string> {
   const client = requireStripe();
   const subscription = await getSubscription(userId);
@@ -156,7 +228,9 @@ async function synchronizeSubscription(subscription: Stripe.Subscription): Promi
   // upgrade is briefly not "active". A truly ended subscription becomes
   // canceled/unpaid, which correctly falls through to inactive.
   const active = ["active", "trialing", "past_due"].includes(subscription.status);
-  const row: SubscriptionRow = {
+  // The auto-reload settings and saved card are managed elsewhere; the upsert
+  // never writes them, so this identity/budget row deliberately omits them.
+  const row = {
     userId,
     stripeCustomerId: stringId(subscription.customer),
     stripeSubscriptionId: subscription.id,
@@ -172,6 +246,34 @@ async function synchronizeSubscription(subscription: Stripe.Subscription): Promi
   // inviter. Guarded in the database, so repeated subscription webhook events
   // (created, updated, renewals) never double-credit.
   if (active) await creditReferralOnPayment(userId, REFERRAL_BONUS_MICRODOLLARS);
+}
+
+// Fulfill a completed one-time top-up checkout: grant the purchased tokens and
+// save the card (set as the customer default) so auto-reload can use it later.
+// Reprocessing is prevented by the stripe_events guard around the webhook.
+async function fulfillTopup(client: Stripe, session: Stripe.Checkout.Session): Promise<void> {
+  const userId = session.metadata?.workcrew_user_id ?? session.client_reference_id ?? undefined;
+  const parsedPack = tokenPackIdSchema.safeParse(session.metadata?.workcrew_topup_pack);
+  if (!userId || !parsedPack.success) return;
+  const pack = parsedPack.data;
+
+  const customerId = stringId(session.customer);
+  if (customerId && typeof session.payment_intent === "string") {
+    const intent = await client.paymentIntents.retrieve(session.payment_intent);
+    const paymentMethodId = stringId(intent.payment_method as string | { id: string } | null);
+    if (paymentMethodId) {
+      await client.customers.update(customerId, { invoice_settings: { default_payment_method: paymentMethodId } });
+      await setPaymentMethod(userId, paymentMethodId);
+    }
+  }
+
+  await grantTokenCredit({
+    userId,
+    grantedMicrodollars: tokenPackGrant(pack),
+    chargedMicrodollars: tokenPackCharge(pack),
+    source: "token_topup",
+    providerRequestId: typeof session.payment_intent === "string" ? session.payment_intent : undefined
+  });
 }
 
 export async function handleStripeWebhook(rawBody: Buffer, signature: string): Promise<void> {
@@ -195,7 +297,10 @@ export async function handleStripeWebhook(rawBody: Buffer, signature: string): P
       break;
     case "checkout.session.completed": {
       const session = event.data.object;
-      if (typeof session.subscription === "string") {
+      // A one-time token top-up: grant the tokens and remember the card.
+      if (session.mode === "payment" && session.metadata?.workcrew_topup_pack) {
+        await fulfillTopup(client, session);
+      } else if (typeof session.subscription === "string") {
         await synchronizeSubscription(await client.subscriptions.retrieve(session.subscription));
       }
       break;
