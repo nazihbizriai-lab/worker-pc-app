@@ -52,6 +52,10 @@ const envSchema = z.object({
   EMAIL_FROM: z.string().default("WorkCrew <onboarding@resend.dev>"),
   WORKCREW_PUBLIC_URL: z.string().optional(),
   WORKCREW_REQUIRE_EMAIL_VERIFICATION: booleanText,
+  // When false (the default, strict pre-launch mode) a subscription only grants
+  // access while it is active or trialing. Set to "true" to intentionally extend
+  // access through Stripe's past_due payment-retry window as a grace period.
+  WORKCREW_BILLING_GRACE_PAST_DUE: booleanText,
   // Where the landing page "Download for Windows" button points. Set this to the
   // installer link once a release is published.
   WORKCREW_DOWNLOAD_URL: z.string().optional()
@@ -212,6 +216,7 @@ export const config = {
   emailFrom: env.EMAIL_FROM,
   publicUrl,
   requireEmailVerification: env.WORKCREW_REQUIRE_EMAIL_VERIFICATION,
+  billingGracePastDue: env.WORKCREW_BILLING_GRACE_PAST_DUE,
   downloadUrl: env.WORKCREW_DOWNLOAD_URL ?? ""
 } as const;
 

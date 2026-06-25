@@ -47,6 +47,19 @@ function identifyPrice(id: string): { plan: PlanId; interval: BillingInterval } 
   return null;
 }
 
+// The single source of truth for which Stripe subscription statuses grant access.
+// Pre-launch strict mode counts only a live subscription ("active") or a live
+// trial ("trialing"). "past_due" is Stripe's payment-retry window; it is treated
+// as entitled ONLY when an explicit grace period is enabled
+// (WORKCREW_BILLING_GRACE_PAST_DUE), so a failed renewal does not silently keep a
+// non-paying account unlocked. canceled / unpaid / incomplete are never entitled.
+const ENTITLED_STATUSES = new Set(["active", "trialing"]);
+export function isEntitledStatus(status: string): boolean {
+  if (ENTITLED_STATUSES.has(status)) return true;
+  if (status === "past_due" && config.billingGracePastDue) return true;
+  return false;
+}
+
 export async function createCheckout(userId: string, plan: PlanId, interval: BillingInterval): Promise<string> {
   const client = requireStripe();
   const existing = await getSubscription(userId);
@@ -228,12 +241,9 @@ async function synchronizeSubscription(subscription: Stripe.Subscription): Promi
   }
 
   const period = subscriptionPeriod(subscription);
-  // Treat trialing and past_due as still entitled. "past_due" is Stripe's grace
-  // window while it retries a payment, and "trialing" is a live trial, so a
-  // paying customer is not locked out the instant a renewal or an in-place plan
-  // upgrade is briefly not "active". A truly ended subscription becomes
-  // canceled/unpaid, which correctly falls through to inactive.
-  const active = ["active", "trialing", "past_due"].includes(subscription.status);
+  // Entitlement comes from the centralized policy. Strict by default: only
+  // active/trialing count; past_due requires the explicit grace-period flag.
+  const active = isEntitledStatus(subscription.status);
   // The auto-reload settings and saved card are managed elsewhere; the upsert
   // never writes them, so this identity/budget row deliberately omits them.
   const row = {
@@ -256,8 +266,11 @@ async function synchronizeSubscription(subscription: Stripe.Subscription): Promi
 
 // Fulfill a completed one-time top-up checkout: grant the purchased tokens and
 // save the card (set as the customer default) so auto-reload can use it later.
-// Reprocessing is prevented by the stripe_events guard around the webhook.
-async function fulfillTopup(client: Stripe, session: Stripe.Checkout.Session): Promise<void> {
+// The grant is made idempotent at the credit write via dedupeId (stored in
+// usage_ledger.dedupe_id, unique-indexed), so two identical webhook deliveries
+// processed concurrently grant the tokens exactly once. The stripe_events guard
+// around the webhook is a second, coarser layer, not the primary protection.
+async function fulfillTopup(client: Stripe, session: Stripe.Checkout.Session, dedupeId: string): Promise<void> {
   const userId = session.metadata?.workcrew_user_id ?? session.client_reference_id ?? undefined;
   const parsedPack = tokenPackIdSchema.safeParse(session.metadata?.workcrew_topup_pack);
   if (!userId || !parsedPack.success) return;
@@ -278,7 +291,8 @@ async function fulfillTopup(client: Stripe, session: Stripe.Checkout.Session): P
     grantedMicrodollars: tokenPackGrant(pack),
     chargedMicrodollars: tokenPackCharge(pack),
     source: "token_topup",
-    providerRequestId: typeof session.payment_intent === "string" ? session.payment_intent : undefined
+    providerRequestId: typeof session.payment_intent === "string" ? session.payment_intent : undefined,
+    dedupeId
   });
 }
 
@@ -303,9 +317,15 @@ export async function handleStripeWebhook(rawBody: Buffer, signature: string): P
       break;
     case "checkout.session.completed": {
       const session = event.data.object;
-      // A one-time token top-up: grant the tokens and remember the card.
+      // A one-time token top-up: grant the tokens and remember the card. The
+      // dedupe key prefers the payment intent (stable per charge) and falls back
+      // to the event id; it is enforced at the credit write so two concurrent
+      // identical deliveries cannot double-credit even if both pass the
+      // stripe_events check before either records it.
       if (session.mode === "payment" && session.metadata?.workcrew_topup_pack) {
-        await fulfillTopup(client, session);
+        const paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : null;
+        const dedupeId = `topup:${paymentIntentId ?? event.id}`;
+        await fulfillTopup(client, session, dedupeId);
       } else if (typeof session.subscription === "string") {
         await synchronizeSubscription(await client.subscriptions.retrieve(session.subscription));
       }

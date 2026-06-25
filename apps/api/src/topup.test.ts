@@ -107,6 +107,48 @@ describe("token top-up credits", () => {
     expect((await getTopupThisPeriod(userId, window)).autoReloaded).toBe(grant);
   });
 
+  it("credits a top-up exactly once when the same dedupe id arrives twice", async () => {
+    const anchorMs = Date.now() + 10;
+    const userId = await makeUser(anchorMs);
+    const window = getBudgetWindow(anchorMs, anchorMs);
+    const dedupeId = `topup:pi_${randomUUID()}`;
+
+    // Two identical checkout.session.completed deliveries fulfil the same payment.
+    await grantTokenCredit({ userId, grantedMicrodollars: 5_000_000, chargedMicrodollars: 19_000_000, source: "token_topup", nowMs: anchorMs, dedupeId });
+    await grantTokenCredit({ userId, grantedMicrodollars: 5_000_000, chargedMicrodollars: 19_000_000, source: "token_topup", nowMs: anchorMs, dedupeId });
+
+    // The grant landed once, not twice.
+    expect((await getTopupThisPeriod(userId, window)).purchased).toBe(5_000_000);
+    expect((await getBudgetUsage(userId, window)).used).toBe(-5_000_000);
+  });
+
+  it("does not double-credit under concurrent identical deliveries (race)", async () => {
+    const anchorMs = Date.now() + 11;
+    const userId = await makeUser(anchorMs);
+    const window = getBudgetWindow(anchorMs, anchorMs);
+    const dedupeId = `topup:pi_${randomUUID()}`;
+
+    // Both webhook deliveries are processed at the same moment; the unique index
+    // on dedupe_id makes the second insert a no-op rather than a second credit.
+    await Promise.all([
+      grantTokenCredit({ userId, grantedMicrodollars: 5_000_000, chargedMicrodollars: 0, source: "token_topup", nowMs: anchorMs, dedupeId }),
+      grantTokenCredit({ userId, grantedMicrodollars: 5_000_000, chargedMicrodollars: 0, source: "token_topup", nowMs: anchorMs, dedupeId })
+    ]);
+
+    expect((await getTopupThisPeriod(userId, window)).purchased).toBe(5_000_000);
+  });
+
+  it("treats different dedupe ids as separate legitimate top-ups", async () => {
+    const anchorMs = Date.now() + 12;
+    const userId = await makeUser(anchorMs);
+    const window = getBudgetWindow(anchorMs, anchorMs);
+
+    await grantTokenCredit({ userId, grantedMicrodollars: 5_000_000, chargedMicrodollars: 0, source: "token_topup", nowMs: anchorMs, dedupeId: `topup:pi_${randomUUID()}` });
+    await grantTokenCredit({ userId, grantedMicrodollars: 5_000_000, chargedMicrodollars: 0, source: "token_topup", nowMs: anchorMs, dedupeId: `topup:pi_${randomUUID()}` });
+
+    expect((await getTopupThisPeriod(userId, window)).purchased).toBe(10_000_000);
+  });
+
   it("does not auto-reload when it is turned off", async () => {
     const anchorMs = Date.now() + 3;
     const userId = await makeUser(anchorMs);

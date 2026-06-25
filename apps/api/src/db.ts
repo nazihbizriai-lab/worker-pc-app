@@ -110,7 +110,11 @@ export async function initializeDatabase(db: DatabaseClient = client): Promise<v
       status TEXT NOT NULL CHECK (status IN ('reserved', 'settled', 'released')),
       provider_request_id TEXT,
       created_at_ms BIGINT NOT NULL,
-      settled_at_ms BIGINT
+      settled_at_ms BIGINT,
+      -- Stable key for credit grants that must happen at most once (Stripe top-up
+      -- fulfilment, auto-reload). NULL for ordinary reservation/settlement rows.
+      -- A unique index (created below) makes a duplicate grant a no-op.
+      dedupe_id TEXT
     )`,
     `CREATE INDEX IF NOT EXISTS idx_usage_user_period
       ON usage_ledger(user_id, period_start_ms, period_end_ms, status)`,
@@ -257,10 +261,18 @@ export async function initializeDatabase(db: DatabaseClient = client): Promise<v
   await addColumnIfMissing(db, "subscriptions", "auto_reload_pack", "TEXT NOT NULL DEFAULT 'small'");
   await addColumnIfMissing(db, "subscriptions", "monthly_topup_limit_micro", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing(db, "subscriptions", "stripe_payment_method_id", "TEXT");
+  // Per-credit dedupe key on existing ledgers, so Stripe top-up fulfilment and
+  // auto-reload can be made idempotent at the credit write itself.
+  await addColumnIfMissing(db, "usage_ledger", "dedupe_id", "TEXT");
   // Created after the column migration so it also applies to databases whose
   // users table predates the referral columns. Multiple NULL codes are allowed
   // by both SQLite and Postgres, so legacy rows without a code do not collide.
   await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)");
+  // The dedupe guard for one-time credit grants. NULL dedupe_id (every
+  // reservation/settlement row) is allowed many times by both dialects; only a
+  // repeated non-null key collides, which ON CONFLICT / INSERT OR IGNORE turns
+  // into a no-op so a duplicate top-up or auto-reload cannot double-credit.
+  await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_dedupe ON usage_ledger(dedupe_id)");
 }
 
 async function addColumnIfMissing(db: DatabaseClient, table: string, column: string, definition: string): Promise<void> {

@@ -230,26 +230,31 @@ export async function grantTokenCredit(input: {
   source: "token_topup" | "auto_reload";
   providerRequestId?: string;
   nowMs?: number;
-  // A stable id for this grant. When supplied, a second insert with the same id
-  // is ignored instead of creating a duplicate credit row, so a retried or
-  // concurrent grant for one exhaustion event credits the user exactly once.
+  // A stable key for this grant (for example a Stripe payment intent or event id,
+  // or an auto-reload exhaustion key). When supplied it is stored in the
+  // dedupe_id column, which carries a unique index (db.ts). A second grant with
+  // the same key is ignored atomically at the write, so a retried or concurrent
+  // top-up or auto-reload credits the user exactly once even if two identical
+  // webhook deliveries are processed at the same moment.
   dedupeId?: string;
 }): Promise<{ window: BudgetWindow } | null> {
   const nowMs = input.nowMs ?? Date.now();
   const subscription = await getSubscription(input.userId);
   if (!subscription) return null;
   const window = getBudgetWindow(subscription.budgetAnchorMs, nowMs);
-  // When a dedupe id is given, swallow a primary-key conflict so a duplicate
-  // grant is a no-op. The two dialects spell this differently.
+  // When a dedupe id is given, a duplicate insert is ignored so the credit write
+  // itself is the dedupe point (not a separate event check that can race). The
+  // guard is the unique index on dedupe_id, enforced atomically: INSERT OR IGNORE
+  // on SQLite/libsql, ON CONFLICT (dedupe_id) DO NOTHING on Postgres.
   const insertVerb = input.dedupeId && client.dialect !== "postgres" ? "INSERT OR IGNORE INTO" : "INSERT INTO";
-  const onConflict = input.dedupeId && client.dialect === "postgres" ? " ON CONFLICT (id) DO NOTHING" : "";
+  const onConflict = input.dedupeId && client.dialect === "postgres" ? " ON CONFLICT (dedupe_id) DO NOTHING" : "";
   await client.execute({
     sql: `${insertVerb} usage_ledger(
         id, user_id, run_id, period_start_ms, period_end_ms, model,
-        reserved_microdollars, actual_microdollars, status, provider_request_id, created_at_ms, settled_at_ms
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'settled', ?, ?, ?)${onConflict}`,
+        reserved_microdollars, actual_microdollars, status, provider_request_id, created_at_ms, settled_at_ms, dedupe_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'settled', ?, ?, ?, ?)${onConflict}`,
     args: [
-      input.dedupeId ?? randomUUID(),
+      randomUUID(),
       input.userId,
       input.source,
       window.startMs,
@@ -259,7 +264,8 @@ export async function grantTokenCredit(input: {
       -Math.abs(Math.round(input.grantedMicrodollars)),
       input.providerRequestId ?? null,
       nowMs,
-      nowMs
+      nowMs,
+      input.dedupeId ?? null
     ]
   });
   return { window };

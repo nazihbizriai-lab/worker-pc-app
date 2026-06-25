@@ -15,6 +15,25 @@ type DesktopSettings = {
 // Development overrides it via the WORKCREW_API_URL environment variable.
 const DEFAULT_BACKEND_URL = "https://workcrew-backend.onrender.com";
 
+// In a packaged production build the app must only ever talk to the official
+// backend. Otherwise a tampered settings.json, or a user socially engineered into
+// pasting a "new server" address, could point the app at an attacker host that
+// harvests the login token. The allowlist is matched by ORIGIN (scheme, host,
+// port). A developer testing a packaged build can opt out with the explicit
+// WORKCREW_ALLOW_CUSTOM_BACKEND=1 environment override. Outside a packaged
+// install (development, e2e, tests) any backend is allowed.
+const ALLOWED_BACKEND_ORIGINS = [new URL(DEFAULT_BACKEND_URL).origin];
+
+function isAllowedBackendUrl(raw: string): boolean {
+  if (!app.isPackaged) return true;
+  if (process.env.WORKCREW_ALLOW_CUSTOM_BACKEND === "1") return true;
+  try {
+    return ALLOWED_BACKEND_ORIGINS.includes(new URL(raw).origin);
+  } catch {
+    return false;
+  }
+}
+
 let cache: DesktopSettings | null = null;
 
 function settingsPath(): string {
@@ -60,13 +79,20 @@ export function normalizeBackendUrl(raw: string): string {
  */
 export function getBackendUrl(): string {
   const stored = load().backendUrl;
-  const value = stored || process.env.WORKCREW_API_URL || DEFAULT_BACKEND_URL;
+  const candidate = stored || process.env.WORKCREW_API_URL || DEFAULT_BACKEND_URL;
+  // Defense in depth: even if a disallowed URL reached settings.json or the env
+  // on a packaged build, ignore it and fall back to the official backend rather
+  // than send credentials somewhere untrusted.
+  const value = isAllowedBackendUrl(candidate) ? candidate : DEFAULT_BACKEND_URL;
   return value.replace(/\/$/, "");
 }
 
 /** Persist a new backend URL after validating it, returning the stored value. */
 export function setBackendUrl(raw: string): string {
   const normalized = normalizeBackendUrl(raw);
+  if (!isAllowedBackendUrl(normalized)) {
+    throw new Error("This build connects only to the official WorkCrew backend.");
+  }
   const next: DesktopSettings = { ...load(), backendUrl: normalized };
   writeFileSync(settingsPath(), JSON.stringify(next, null, 2), { encoding: "utf8", mode: 0o600 });
   cache = next;
