@@ -24,8 +24,8 @@ import {
 } from "@workcrew/contracts";
 import Fastify from "fastify";
 import rawBody from "fastify-raw-body";
-import { ZodError } from "zod";
-import { authenticate } from "./auth.js";
+import { z, ZodError } from "zod";
+import { authenticate, resolveUserId } from "./auth.js";
 import {
   localAuthProvider,
   refreshInputSchema,
@@ -92,15 +92,37 @@ const app = Fastify({
   logger: { level: config.logLevel },
   bodyLimit: 256 * 1024,
   requestTimeout: 70_000,
-  trustProxy: config.nodeEnv === "production"
+  // Trust a FIXED number of proxy hops in production (Render's load balancer),
+  // not boolean true. With true, request.ip is taken from the leftmost,
+  // client-supplied X-Forwarded-For entry and can be spoofed to mint fresh
+  // rate-limit buckets. A hop count makes request.ip the real client address.
+  // Configurable in case the proxy topology changes; defaults to one hop.
+  trustProxy: config.nodeEnv === "production" ? config.trustedProxyHops : false
 });
 
 await app.register(helmet, { global: true });
+
+// Resolve the authenticated user id BEFORE the rate limiter runs, so the limiter
+// keys on the verified subject (which a user cannot rotate) rather than on the
+// raw, client-controlled Authorization header. Registered before the rate-limit
+// plugin so this onRequest hook runs first. It never rejects; route handlers do
+// the authoritative auth check.
+app.addHook("onRequest", async (request) => {
+  try {
+    request.authUserId = await resolveUserId(request);
+  } catch {
+    request.authUserId = null;
+  }
+});
 await app.register(rateLimit, {
   max: 120,
   timeWindow: "1 minute",
   ban: 3,
-  keyGenerator: (request) => request.headers.authorization?.slice(-24) ?? request.ip
+  // Authenticated requests are bucketed per verified user; everything else
+  // (sign-in, sign-up, reset, and any request with a missing/invalid token)
+  // falls back to the real client IP. A junk Authorization header therefore
+  // cannot create a fresh bucket: it resolves to null and is keyed on IP.
+  keyGenerator: (request) => (request.authUserId ? `u:${request.authUserId}` : request.ip)
 });
 await app.register(cors, {
   origin(origin, callback) {
@@ -237,10 +259,12 @@ app.get("/billing/cancel", async (_request, reply) => {
 // ---------------------------------------------------------------------------
 
 // Tight per-route limits on the credential and email endpoints, keyed by IP
-// (these requests carry no Authorization header, so the global keyGenerator
-// falls back to request.ip). This is the brute-force and email-spam guard that
-// the broad global limit is too loose to provide.
-const authLimit = (max: number) => ({ config: { rateLimit: { max, timeWindow: "1 minute" } } });
+// A stricter per-route limit than the broad global 120/min. The global
+// keyGenerator buckets pre-auth requests (sign-in/up/reset, which carry no valid
+// token) by client IP, and authenticated requests by the verified user id, so
+// these caps are the real brute-force, email-spam, and expensive-action guards.
+const routeLimit = (max: number) => ({ config: { rateLimit: { max, timeWindow: "1 minute" } } });
+const authLimit = routeLimit;
 
 app.post("/v1/auth/sign-up", authLimit(8), async (request) => {
   const body = signUpInputSchema.parse(request.body);
@@ -252,12 +276,12 @@ app.post("/v1/auth/sign-in", authLimit(10), async (request) => {
   return { session: await localAuthProvider.signIn(body.email, body.password) };
 });
 
-app.post("/v1/auth/refresh", async (request) => {
+app.post("/v1/auth/refresh", authLimit(30), async (request) => {
   const body = refreshInputSchema.parse(request.body);
   return { session: await localAuthProvider.refresh(body.refreshToken) };
 });
 
-app.post("/v1/auth/sign-out", async (request) => {
+app.post("/v1/auth/sign-out", authLimit(30), async (request) => {
   const body = signOutInputSchema.parse(request.body);
   await localAuthProvider.signOut(body.refreshToken);
   return { ok: true };
@@ -344,7 +368,7 @@ app.get("/v1/entitlement", async (request) => subscriptionState(await authentica
 // people they have invited, how many have paid, and the bonus earned so far.
 // Available to any signed-in user (even before they subscribe) so they can start
 // inviting; a legacy account without a code is assigned one on first read.
-app.get("/v1/referral", async (request): Promise<ReferralInfo> => {
+app.get("/v1/referral", routeLimit(30), async (request): Promise<ReferralInfo> => {
   const userId = await authenticate(request);
   const code = await ensureReferralCode(userId);
   const stats = await countReferrals(code);
@@ -378,7 +402,7 @@ app.post("/v1/recordings/summarize", authLimit(20), async (request) => {
 // simulated billing mode is selected, and never in production. It writes an
 // active, Stripe-shaped entitlement through the same upsert path the real
 // Stripe webhook uses, then returns the resulting entitlement state.
-app.post("/v1/billing/simulate", async (request) => {
+app.post("/v1/billing/simulate", routeLimit(15), async (request) => {
   const userId = await authenticate(request);
   if (config.billingMode !== "simulated" || config.nodeEnv === "production") {
     throw Object.assign(new Error("Simulated billing is disabled"), { statusCode: 404, code: "NOT_FOUND" });
@@ -390,7 +414,7 @@ app.post("/v1/billing/simulate", async (request) => {
   return subscriptionState(userId);
 });
 
-app.post("/v1/billing/checkout", async (request) => {
+app.post("/v1/billing/checkout", routeLimit(15), async (request) => {
   const userId = await authenticate(request);
   const body = createCheckoutSchema.parse(request.body);
   return { url: await createCheckout(userId, body.plan, body.interval) };
@@ -399,19 +423,19 @@ app.post("/v1/billing/checkout", async (request) => {
 // Change the plan of an existing active subscription in place (Pro to Ultra),
 // rather than opening a second checkout. Returns the updated entitlement so the
 // app reflects the new plan immediately.
-app.post("/v1/billing/change-plan", async (request) => {
+app.post("/v1/billing/change-plan", routeLimit(15), async (request) => {
   const userId = await authenticate(request);
   const body = createCheckoutSchema.parse(request.body);
   await changePlan(userId, body.plan, body.interval);
   return subscriptionState(userId);
 });
 
-app.post("/v1/billing/portal", async (request) => ({ url: await createPortal(await authenticate(request)) }));
+app.post("/v1/billing/portal", routeLimit(15), async (request) => ({ url: await createPortal(await authenticate(request)) }));
 
 // Buy a one-time token pack. In live billing this returns a hosted Stripe
 // Checkout URL the app opens; in simulated billing it grants the tokens with no
 // charge and returns the refreshed entitlement, so the whole flow is testable.
-app.post("/v1/billing/topup", async (request) => {
+app.post("/v1/billing/topup", routeLimit(15), async (request) => {
   const userId = await authenticate(request);
   requireActive(await getSubscription(userId));
   const body = topupSchema.parse(request.body);
@@ -429,7 +453,7 @@ app.post("/v1/billing/topup", async (request) => {
 
 // Save auto-reload preferences (enable/disable, which pack, and the per-period
 // token cap on automatic spending). Returns the refreshed entitlement.
-app.post("/v1/billing/auto-reload", async (request) => {
+app.post("/v1/billing/auto-reload", routeLimit(15), async (request) => {
   const userId = await authenticate(request);
   requireActive(await getSubscription(userId));
   const body = autoReloadSettingsSchema.parse(request.body);
@@ -444,12 +468,28 @@ app.post("/v1/billing/auto-reload", async (request) => {
 app.post("/v1/billing/webhook", { config: { rawBody: true } }, async (request, reply) => {
   const signature = request.headers["stripe-signature"];
   const body = (request as typeof request & { rawBody?: Buffer }).rawBody;
-  if (typeof signature !== "string" || !body) return reply.code(400).send({ error: "Invalid webhook" });
-  await handleStripeWebhook(body, signature);
-  return { received: true };
+  if (typeof signature !== "string" || !body) {
+    request.log.warn({ event: "stripe_webhook_bad_request" }, "Stripe webhook missing signature or body");
+    return reply.code(400).send({ error: "Invalid webhook" });
+  }
+  try {
+    const result = await handleStripeWebhook(body, signature);
+    // Audit trail for payment/credit events without logging any secret or payload.
+    request.log.info({ event: "stripe_webhook_processed", type: result.type, duplicate: result.duplicate }, "Stripe webhook processed");
+    return { received: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if ((error as { type?: string }).type === "StripeSignatureVerificationError" || /signature/i.test(message)) {
+      // Forged or misdirected webhook: a distinct, greppable security event and a
+      // 400 (not a 500), never logging the raw body or the signature value.
+      request.log.warn({ event: "stripe_webhook_signature_failed" }, "Stripe webhook signature verification failed");
+      return reply.code(400).send({ error: "Invalid signature" });
+    }
+    throw error; // a genuine processing error: 500 so Stripe retries
+  }
 });
 
-app.post("/v1/runs", async (request) => {
+app.post("/v1/runs", routeLimit(30), async (request) => {
   const userId = await authenticate(request);
   requireActive(await getSubscription(userId));
   const body = createRunSchema.parse(request.body);
@@ -472,11 +512,12 @@ app.post("/v1/runs", async (request) => {
   return { runId: id, status: "ready" };
 });
 
-app.post<{ Params: { runId: string } }>("/v1/runs/:runId/next", async (request): Promise<RunStepResponse> => {
+app.post<{ Params: { runId: string } }>("/v1/runs/:runId/next", routeLimit(90), async (request): Promise<RunStepResponse> => {
   const userId = await authenticate(request);
   const subscription = requireActive(await getSubscription(userId));
   const body = nextRunStepSchema.parse(request.body ?? {});
-  const run = await getRun(request.params.runId, userId);
+  const runId = z.string().uuid().parse(request.params.runId);
+  const run = await getRun(runId, userId);
   if (!run) throw Object.assign(new Error("Run not found"), { statusCode: 404, code: "RUN_NOT_FOUND" });
   if (run.status === "complete") return { runId: run.id, status: "complete", message: "This run is already complete." };
   if (run.status === "failed") {
@@ -641,10 +682,19 @@ app.post<{ Params: { runId: string } }>("/v1/runs/:runId/next", async (request):
 // route only, since the global limit is sized for small JSON payloads.
 // ---------------------------------------------------------------------------
 
-app.post("/v1/attachments", { bodyLimit: 16 * 1024 * 1024 }, async (request) => {
+app.post("/v1/attachments", { bodyLimit: 16 * 1024 * 1024, config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request) => {
   const userId = await authenticate(request);
   requireActive(await getSubscription(userId));
   const body = attachmentUploadSchema.parse(request.body);
+  // If the upload names a conversation, confirm it belongs to this user before
+  // storing the reference, so the conversation_id column cannot be set to another
+  // user's conversation id (a data-integrity guard mirroring the chat path).
+  if (body.conversationId) {
+    const conversation = await getConversation(body.conversationId, userId);
+    if (!conversation) {
+      throw Object.assign(new Error("Conversation not found"), { statusCode: 404, code: "CONVERSATION_NOT_FOUND" });
+    }
+  }
   return processAndStoreAttachment({
     userId,
     conversationId: body.conversationId,
@@ -659,7 +709,7 @@ app.post("/v1/attachments", { bodyLimit: 16 * 1024 * 1024 }, async (request) => 
 // routes back the Recents list and reload.
 // ---------------------------------------------------------------------------
 
-app.post("/v1/chat", async (request, reply) => {
+app.post("/v1/chat", routeLimit(40), async (request, reply) => {
   const userId = await authenticate(request);
   const subscription = requireActive(await getSubscription(userId));
   const body = chatSendSchema.parse(request.body);
@@ -724,7 +774,7 @@ app.get("/v1/conversations", async (request) => {
 
 app.get<{ Params: { id: string } }>("/v1/conversations/:id", async (request) => {
   const userId = await authenticate(request);
-  const conversation = await getConversation(request.params.id, userId);
+  const conversation = await getConversation(z.string().uuid().parse(request.params.id), userId);
   if (!conversation) {
     throw Object.assign(new Error("Conversation not found"), { statusCode: 404, code: "CONVERSATION_NOT_FOUND" });
   }
@@ -751,17 +801,24 @@ app.get<{ Params: { id: string } }>("/v1/conversations/:id", async (request) => 
 
 app.delete<{ Params: { id: string } }>("/v1/conversations/:id", async (request) => {
   const userId = await authenticate(request);
-  const removed = await deleteConversation(request.params.id, userId);
+  const removed = await deleteConversation(z.string().uuid().parse(request.params.id), userId);
   if (!removed) {
     throw Object.assign(new Error("Conversation not found"), { statusCode: 404, code: "CONVERSATION_NOT_FOUND" });
   }
   return { ok: true };
 });
 
+// Authentication/authorization failure codes worth surfacing as a distinct
+// security event so brute force and token abuse are visible in logs (the values
+// logged are codes/paths/IP only, never credentials or tokens).
+const AUTH_FAILURE_CODES = new Set(["AUTH_REQUIRED", "AUTH_INVALID", "INVALID_CREDENTIALS", "EMAIL_NOT_VERIFIED", "INVALID_REFRESH_TOKEN"]);
+
 app.setErrorHandler((error, request, reply) => {
   const statusCode = error instanceof ZodError ? 400 : Number((error as { statusCode?: number }).statusCode ?? 500);
   const code = error instanceof ZodError ? "INVALID_REQUEST" : String((error as { code?: string }).code ?? "INTERNAL_ERROR");
   if (statusCode >= 500) request.log.error({ err: error }, "Request failed");
+  else if (statusCode === 429) request.log.warn({ event: "rate_limited", path: request.url, ip: request.ip }, "Rate limit exceeded");
+  else if (AUTH_FAILURE_CODES.has(code)) request.log.warn({ event: "auth_failure", code, path: request.url, ip: request.ip }, "Authentication failed");
   else request.log.info({ code, path: request.url }, "Request rejected");
   void reply.code(statusCode).send({
     error: statusCode >= 500 ? "The service could not complete the request" : error instanceof Error ? error.message : "The request was rejected",

@@ -56,6 +56,11 @@ const envSchema = z.object({
   // access while it is active or trialing. Set to "true" to intentionally extend
   // access through Stripe's past_due payment-retry window as a grace period.
   WORKCREW_BILLING_GRACE_PAST_DUE: booleanText,
+  // Number of trusted reverse-proxy hops in front of the API in production (the
+  // platform load balancer). Used to derive the real client IP for rate limiting
+  // from X-Forwarded-For without trusting client-supplied entries. One hop (the
+  // default) matches a single Render proxy; raise it if you add another proxy.
+  WORKCREW_TRUSTED_PROXY_HOPS: z.coerce.number().int().min(1).max(10).default(1),
   // Where the landing page "Download for Windows" button points. Set this to the
   // installer link once a release is published.
   WORKCREW_DOWNLOAD_URL: z.string().optional()
@@ -95,6 +100,12 @@ if (env.NODE_ENV === "production") {
     throw new Error(`Production configuration is incomplete: ${missing.join(", ")}`);
   }
 
+  // Production must use a LIVE Stripe key. A test key here boots silently on test
+  // mode (paid signups never actually charge), so fail fast instead.
+  if (env.STRIPE_SECRET_KEY && !env.STRIPE_SECRET_KEY.startsWith("sk_live_")) {
+    throw new Error("Production requires a live Stripe secret key (sk_live_...).");
+  }
+
   if (env.WORKCREW_DEV_AUTH || env.WORKCREW_DEV_BILLING || env.WORKCREW_MOCK_AI) {
     throw new Error("Development bypasses cannot be enabled in production");
   }
@@ -104,6 +115,16 @@ if (env.NODE_ENV === "production") {
   if (env.BILLING_MODE === "simulated") {
     throw new Error("Simulated billing cannot be used in production; set BILLING_MODE=stripe");
   }
+}
+
+// A live Stripe secret key must never sit in a development or simulated-billing
+// process, where test traffic could trigger real customer charges and the live
+// secret is more exposed. This complements the production live-key requirement.
+if (
+  env.STRIPE_SECRET_KEY?.startsWith("sk_live_") &&
+  (env.NODE_ENV !== "production" || env.BILLING_MODE !== "stripe")
+) {
+  throw new Error("A live Stripe secret key (sk_live_) must only be used in production Stripe billing.");
 }
 
 /**
@@ -152,6 +173,14 @@ const localAuthSecret = resolveLocalAuthSecret();
 // auto-provided URL, then the local default. Used for email links and the
 // Stripe success/cancel pages.
 const publicUrl = (env.WORKCREW_PUBLIC_URL ?? process.env.RENDER_EXTERNAL_URL ?? "http://127.0.0.1:8787").replace(/\/$/, "");
+
+// In production the public URL backs the email verify/reset links and the Stripe
+// success/cancel redirects, so it must be https and not localhost. A plaintext or
+// localhost value would mint interceptable links and break the post-checkout
+// return path. Fail fast at boot rather than ship broken links.
+if (env.NODE_ENV === "production" && (!/^https:\/\//i.test(publicUrl) || /^https:\/\/(localhost|127\.0\.0\.1)/i.test(publicUrl))) {
+  throw new Error("In production WORKCREW_PUBLIC_URL (or RENDER_EXTERNAL_URL) must be an https, non-localhost URL.");
+}
 
 // The backend serves its own browser pages (password reset, email verification,
 // billing result, landing), and those pages POST back to the API from the same
@@ -217,6 +246,7 @@ export const config = {
   publicUrl,
   requireEmailVerification: env.WORKCREW_REQUIRE_EMAIL_VERIFICATION,
   billingGracePastDue: env.WORKCREW_BILLING_GRACE_PAST_DUE,
+  trustedProxyHops: env.WORKCREW_TRUSTED_PROXY_HOPS,
   downloadUrl: env.WORKCREW_DOWNLOAD_URL ?? ""
 } as const;
 

@@ -296,16 +296,18 @@ async function fulfillTopup(client: Stripe, session: Stripe.Checkout.Session, de
   });
 }
 
-export async function handleStripeWebhook(rawBody: Buffer, signature: string): Promise<void> {
+export async function handleStripeWebhook(rawBody: Buffer, signature: string): Promise<{ type: string; duplicate: boolean }> {
   const client = requireStripe();
   if (!config.stripeWebhookSecret) throw new Error("Stripe webhook secret is not configured");
+  // Throws StripeSignatureVerificationError on a forged/invalid signature; the
+  // route catches that and logs a security event with a 400, not a 500.
   const event = client.webhooks.constructEvent(rawBody, signature, config.stripeWebhookSecret);
 
   // Skip an event we have already fully processed. We check BEFORE processing but
   // record only AFTER, so an event whose handler throws is never marked done and
   // Stripe's automatic retry reprocesses it. The handlers below are idempotent
   // (upsert by subscription), so a rare reprocess is harmless.
-  if (await hasStripeEvent(event.id)) return;
+  if (await hasStripeEvent(event.id)) return { type: event.type, duplicate: true };
 
   switch (event.type) {
     case "customer.subscription.created":
@@ -337,4 +339,5 @@ export async function handleStripeWebhook(rawBody: Buffer, signature: string): P
 
   // Mark handled only after the switch succeeded.
   await recordStripeEvent(event.id, event.type);
+  return { type: event.type, duplicate: false };
 }
