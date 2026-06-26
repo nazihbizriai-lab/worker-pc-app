@@ -69,7 +69,7 @@ import {
 } from "./db.js";
 
 /** Application version reported on /health for diagnostics. */
-const APP_VERSION = "0.1.6";
+const APP_VERSION = "0.1.7";
 
 /**
  * Maximum number of model planning steps a single run may consume. The desktop

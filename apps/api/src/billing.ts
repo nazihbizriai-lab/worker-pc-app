@@ -24,66 +24,37 @@ function requireStripe(): Stripe {
   return stripe;
 }
 
-// The upgrade flow sends the customer to a hosted Stripe page that shows the
-// prorated amount and charges it immediately. "Charge now" (always_invoice) versus
-// "bill on the next invoice" is controlled only by a Billing Portal configuration,
-// never per session, so we lazily create one configuration whose subscription
-// update proration is always_invoice and reuse its id. The promise (not just the
-// id) is cached so concurrent first callers share a single create.
-let upgradePortalConfigPromise: Promise<string> | null = null;
-
-// Build the [{ product, prices }] list the portal's subscription-update feature
-// needs, from the four configured price ids. The confirm page validates the target
-// price against this list, so every upgrade target must appear. WorkCrew stores
-// price ids only, so we resolve each price's product through the API.
-async function buildSubscriptionUpdateProducts(client: Stripe): Promise<Array<{ product: string; prices: string[] }>> {
-  const priceIds = [
-    config.stripePrices.pro.month,
-    config.stripePrices.pro.year,
-    config.stripePrices.ultra.month,
-    config.stripePrices.ultra.year
-  ].filter((id): id is string => Boolean(id));
-
-  const byProduct = new Map<string, string[]>();
-  for (const id of priceIds) {
-    const price = await client.prices.retrieve(id);
-    const productId = typeof price.product === "string" ? price.product : price.product.id;
-    const list = byProduct.get(productId) ?? [];
-    list.push(id);
-    byProduct.set(productId, list);
+// Best-effort: make the account's customer portal charge an upgrade's prorated
+// difference IMMEDIATELY (on the confirm page) instead of deferring it to the next
+// invoice. Stripe controls this only through the portal configuration's
+// subscription-update proration_behavior, so we flip the owner's EXISTING default
+// configuration to always_invoice, reusing the fields they already set up, rather
+// than creating a new configuration from scratch (which a live account rejects).
+// Run before opening the upgrade page; the caller swallows any failure so the page
+// still opens even if this cannot be applied, in which case proration falls back to
+// Stripe's default timing.
+let immediateProrationEnsured = false;
+async function ensureImmediateUpgradeProration(client: Stripe): Promise<void> {
+  if (immediateProrationEnsured) return;
+  const configs = await client.billingPortal.configurations.list({ active: true, limit: 100 });
+  const target = configs.data.find((c) => c.is_default) ?? configs.data[0];
+  const feature = target?.features.subscription_update;
+  if (!target || !feature?.enabled) return;
+  if (feature.proration_behavior === "always_invoice") {
+    immediateProrationEnsured = true;
+    return;
   }
-  return Array.from(byProduct.entries()).map(([product, prices]) => ({ product, prices }));
-}
-
-// Lazily create and cache the Billing Portal configuration whose subscription
-// update charges the proration IMMEDIATELY (always_invoice). If the create fails
-// (most often because the Customer Portal has never been activated in the Stripe
-// dashboard) we surface a clean 502 and clear the cache so a later request retries
-// once the portal is activated, with no redeploy needed.
-async function getUpgradePortalConfigId(client: Stripe): Promise<string> {
-  if (!upgradePortalConfigPromise) {
-    upgradePortalConfigPromise = (async () => {
-      const products = await buildSubscriptionUpdateProducts(client);
-      const configuration = await client.billingPortal.configurations.create({
-        features: {
-          subscription_update: {
-            enabled: true,
-            default_allowed_updates: ["price"],
-            proration_behavior: "always_invoice",
-            products
-          }
-        }
-      });
-      return configuration.id;
-    })().catch((error) => {
-      upgradePortalConfigPromise = null;
-      throw Object.assign(
-        new Error("Upgrades are temporarily unavailable. Please try again in a moment."),
-        { statusCode: 502, code: "PORTAL_CONFIG_UNAVAILABLE", cause: error }
-      );
-    });
-  }
-  return upgradePortalConfigPromise;
+  await client.billingPortal.configurations.update(target.id, {
+    features: {
+      subscription_update: {
+        enabled: true,
+        default_allowed_updates: feature.default_allowed_updates,
+        products: feature.products?.map((p) => ({ product: p.product, prices: [...p.prices] })),
+        proration_behavior: "always_invoice"
+      }
+    }
+  });
+  immediateProrationEnsured = true;
 }
 
 function priceId(plan: PlanId, interval: BillingInterval): string {
@@ -182,12 +153,13 @@ export function isPlanUpgrade(fromPlan: PlanId, fromInterval: BillingInterval, t
 // duplicate subscription.
 //
 // An UPGRADE (a higher-allowance plan) sends the customer to a hosted Stripe page
-// that shows the prorated difference for the rest of the current period and
-// charges it immediately. The page uses a billing portal configuration whose
-// proration is "always_invoice" (collect now, not on the next renewal). The
-// subscription moves to the higher tier only after that payment clears, and the
-// grant is applied by the customer.subscription.updated / pending_update_applied
-// webhook, so the higher allowance is never handed over for free. This returns a
+// (the customer portal's subscription update confirm flow) that shows the prorated
+// difference and collects payment to confirm the change. It uses the account's
+// existing portal configuration and, best-effort, sets that portal's proration to
+// "always_invoice" so the difference is charged now rather than on the next
+// invoice. The subscription moves to the higher tier and the grant is applied only
+// after that payment, via the customer.subscription.updated / pending_update_applied
+// webhook, so the higher allowance is never granted for free. This returns a
 // { url } to open in the browser.
 //
 // A DOWNGRADE (the same or lower allowance) is a credit, not a charge, so it is
@@ -209,19 +181,20 @@ export async function changePlan(
   const isUpgrade = isPlanUpgrade(subscription.plan, subscription.interval, plan, interval);
 
   if (isUpgrade) {
-    // Send the customer to a HOSTED Stripe page that shows the prorated amount and
-    // charges it immediately, then upgrade them only once that payment clears.
-    // always_invoice (set on the portal configuration, the only place it can be
-    // set) collects the proration on confirm; the subscription moves to the new
-    // price only after the charge settles, so the higher tier is never granted for
-    // free. The grant is applied by the customer.subscription.updated /
-    // pending_update_applied webhook once Stripe confirms payment.
-    const configuration = await getUpgradePortalConfigId(client);
+    // Send the customer to a hosted Stripe page (the customer portal's subscription
+    // update confirm flow) that shows the prorated difference and collects payment
+    // to confirm the upgrade. We use the account's existing (default) portal
+    // configuration, which the owner already set up, so there is nothing fragile to
+    // create. The subscription moves to the higher tier and the grant is applied
+    // only after that payment, via the customer.subscription.updated /
+    // pending_update_applied webhook, so the higher allowance is never granted for
+    // free. First, best-effort, make that page charge the difference now rather than
+    // on the next invoice; if it cannot be set the page still opens.
+    await ensureImmediateUpgradeProration(client).catch(() => {});
     let session: Stripe.BillingPortal.Session;
     try {
       session = await client.billingPortal.sessions.create({
         customer: subscription.stripeCustomerId,
-        configuration,
         flow_data: {
           type: "subscription_update_confirm",
           subscription_update_confirm: {
@@ -232,6 +205,9 @@ export async function changePlan(
         }
       });
     } catch (error) {
+      // The most common cause is that the Customer Portal has not been activated in
+      // the Stripe dashboard. Surface a clean message and keep the user on their
+      // current plan; the detail is logged server side.
       throw Object.assign(
         new Error("We could not start the upgrade. Please try again in a moment."),
         { statusCode: 502, code: "UPGRADE_FAILED", cause: error }
