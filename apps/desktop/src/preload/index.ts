@@ -78,7 +78,8 @@ const workcrew = {
     signIn: (email: string, password: string) => ipcRenderer.invoke("auth:sign-in", { email, password }),
     signUp: (email: string, password: string, referralCode?: string) => ipcRenderer.invoke("auth:sign-up", { email, password, referralCode }),
     reset: (email: string) => ipcRenderer.invoke("auth:reset", email),
-    signOut: () => ipcRenderer.invoke("auth:sign-out")
+    signOut: () => ipcRenderer.invoke("auth:sign-out"),
+    deleteAccount: (): Promise<{ ok: boolean }> => ipcRenderer.invoke("auth:delete-account")
   },
   api: {
     entitlement: (): Promise<SubscriptionState> => ipcRenderer.invoke("api:entitlement"),

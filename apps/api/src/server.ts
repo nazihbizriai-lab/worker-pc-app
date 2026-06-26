@@ -47,7 +47,7 @@ import {
   summarizeRecording
 } from "./anthropic.js";
 import { processAndStoreAttachment } from "./attachments.js";
-import { changePlan, createCheckout, createPortal, createTopupCheckout, handleStripeWebhook } from "./billing.js";
+import { cancelSubscriptionForDeletion, changePlan, createCheckout, createPortal, createTopupCheckout, handleStripeWebhook } from "./billing.js";
 import { landingPage } from "./landing.js";
 import { creditReferralOnPayment, getBudgetUsage, getBudgetWindow, getTopupThisPeriod, grantTokenCredit, planBudget, planLimits, releaseBudget, reserveBudget, rollingUsage, settleBudget, tokenPackCharge } from "./budget.js";
 import { DAY_MS, FIVE_HOUR_MS } from "@workcrew/contracts";
@@ -57,6 +57,7 @@ import {
   client,
   countReferrals,
   createRun,
+  deleteAccount,
   deleteConversation,
   ensureReferralCode,
   getConversation,
@@ -463,6 +464,18 @@ app.post("/v1/billing/auto-reload", routeLimit(15), async (request) => {
     monthlyLimitMicro: body.monthlyLimitMicrodollars
   });
   return subscriptionState(userId);
+});
+
+// Permanently delete the authenticated user's account: cancel the Stripe
+// subscription first (so billing stops and we never orphan an active paid
+// subscription), then remove every row the user owns. The desktop signs out
+// afterward. This is irreversible; the client confirms before calling it.
+app.delete("/v1/account", routeLimit(5), async (request) => {
+  const userId = await authenticate(request);
+  await cancelSubscriptionForDeletion(userId);
+  await deleteAccount(userId);
+  request.log.warn({ event: "account_deleted", userId }, "account deleted");
+  return { ok: true };
 });
 
 app.post("/v1/billing/webhook", { config: { rawBody: true } }, async (request, reply) => {

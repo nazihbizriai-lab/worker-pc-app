@@ -1109,6 +1109,26 @@ export async function deleteConversation(id: string, userId: string): Promise<bo
   return true;
 }
 
+// Permanently remove every row this user owns, for account deletion. Children are
+// deleted before their parents (messages before conversations, refresh tokens
+// before sessions) and the whole thing runs as one batch so a partial delete
+// cannot leave orphaned data. Stripe billing records are intentionally NOT touched
+// here (legal retention); the subscription is canceled at Stripe by the caller.
+export async function deleteAccount(userId: string): Promise<void> {
+  await client.batch([
+    { sql: "DELETE FROM refresh_tokens WHERE session_id IN (SELECT id FROM sessions WHERE user_id = ?)", args: [userId] },
+    { sql: "DELETE FROM sessions WHERE user_id = ?", args: [userId] },
+    { sql: "DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)", args: [userId] },
+    { sql: "DELETE FROM conversations WHERE user_id = ?", args: [userId] },
+    { sql: "DELETE FROM attachments WHERE user_id = ?", args: [userId] },
+    { sql: "DELETE FROM runs WHERE user_id = ?", args: [userId] },
+    { sql: "DELETE FROM usage_ledger WHERE user_id = ?", args: [userId] },
+    { sql: "DELETE FROM email_tokens WHERE user_id = ?", args: [userId] },
+    { sql: "DELETE FROM subscriptions WHERE user_id = ?", args: [userId] },
+    { sql: "DELETE FROM users WHERE id = ?", args: [userId] }
+  ], "write");
+}
+
 // ---------------------------------------------------------------------------
 // Attachments
 // ---------------------------------------------------------------------------

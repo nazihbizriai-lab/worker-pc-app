@@ -223,6 +223,27 @@ export async function chargeAutoReload(subscription: SubscriptionRow, pack: Toke
   }
 }
 
+// Cancel the user's Stripe subscription immediately, used when the account is
+// being deleted so billing stops. A missing or already-canceled subscription is
+// fine; any other failure is surfaced so the account is NOT deleted while an
+// active paid subscription would keep charging the card. In simulated billing
+// there is nothing to cancel.
+export async function cancelSubscriptionForDeletion(userId: string): Promise<void> {
+  if (config.billingMode !== "stripe") return;
+  const subscription = await getSubscription(userId);
+  if (!subscription?.stripeSubscriptionId) return;
+  const client = requireStripe();
+  try {
+    await client.subscriptions.cancel(subscription.stripeSubscriptionId);
+  } catch (error) {
+    if ((error as { code?: string }).code === "resource_missing") return;
+    throw Object.assign(
+      new Error("We could not cancel your subscription, so your account was not deleted. Please try again."),
+      { statusCode: 502, code: "CANCEL_FAILED" }
+    );
+  }
+}
+
 export async function createPortal(userId: string): Promise<string> {
   const client = requireStripe();
   const subscription = await getSubscription(userId);

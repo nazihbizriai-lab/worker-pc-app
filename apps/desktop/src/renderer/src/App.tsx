@@ -398,7 +398,7 @@ function FiveHourRing({ entitlement }: { entitlement: SubscriptionState }) {
   );
 }
 
-function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan, onEntitlement }: { info: AppInfo; entitlement: SubscriptionState; onSignOut: () => Promise<void>; onUpgrade: () => Promise<void>; onAdjustPlan: (plan: PlanId, interval: BillingInterval) => Promise<void>; onEntitlement: (state: SubscriptionState) => void }) {
+function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan, onEntitlement, onDeleteAccount }: { info: AppInfo; entitlement: SubscriptionState; onSignOut: () => Promise<void>; onUpgrade: () => Promise<void>; onAdjustPlan: (plan: PlanId, interval: BillingInterval) => Promise<void>; onEntitlement: (state: SubscriptionState) => void; onDeleteAccount: () => Promise<void> }) {
   const [model, setModel] = useState<ModelTier>(DEFAULT_CHAT_MODEL);
   const [upgrading, setUpgrading] = useState(false);
   const [upgradeError, setUpgradeError] = useState("");
@@ -838,6 +838,7 @@ function Workspace({ info, entitlement, onSignOut, onUpgrade, onAdjustPlan, onEn
           onSignOut={onSignOut}
           onAdjustPlan={onAdjustPlan}
           onAddTokens={() => { setAccountOpen(false); setTokensOpen(true); }}
+          onDeleteAccount={onDeleteAccount}
         />
       )}
       {tokensOpen && (
@@ -920,6 +921,7 @@ export default function App() {
       entitlement={entitlement}
       onEntitlement={setEntitlement}
       onSignOut={async () => { await window.workcrew.auth.signOut(); setPhase("auth"); }}
+      onDeleteAccount={async () => { await window.workcrew.auth.deleteAccount(); setPhase("auth"); }}
       onUpgrade={async () => {
         // Upgrade to Ultra monthly ($200/mo), matching how the plan is presented,
         // rather than a surprise annual charge.

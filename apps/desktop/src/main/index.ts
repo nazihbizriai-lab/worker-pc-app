@@ -315,6 +315,15 @@ function registerIpc(): void {
   });
   ipcMain.handle("auth:reset", async (_event, email) => auth.sendPasswordReset(z.string().email().max(320).parse(email)));
   ipcMain.handle("auth:sign-out", async () => auth.signOut());
+  // Permanently delete the account on the backend, then clear the local encrypted
+  // session so the app returns to the sign-in screen. The backend cancels billing
+  // and removes the user's data; if it fails (for example a subscription that
+  // could not be canceled) the error propagates and the local session is kept.
+  ipcMain.handle("auth:delete-account", async () => {
+    await api.request("/v1/account", { method: "DELETE" });
+    await auth.signOut();
+    return { ok: true };
+  });
 
   ipcMain.handle("api:entitlement", () => api.request("/v1/entitlement"));
   ipcMain.handle("api:referral", () => api.request("/v1/referral"));

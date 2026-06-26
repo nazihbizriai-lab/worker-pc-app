@@ -15,7 +15,8 @@ export function AccountDialog({
   onClose,
   onSignOut,
   onAdjustPlan,
-  onAddTokens
+  onAddTokens,
+  onDeleteAccount
 }: {
   entitlement: SubscriptionState;
   usedMicrodollars: number;
@@ -23,9 +24,11 @@ export function AccountDialog({
   onSignOut: () => Promise<void>;
   onAdjustPlan: (plan: PlanId, interval: BillingInterval) => Promise<void>;
   onAddTokens: () => void;
+  onDeleteAccount: () => Promise<void>;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
-  const [busy, setBusy] = useState<"adjust" | "signout" | null>(null);
+  const [busy, setBusy] = useState<"adjust" | "signout" | "delete" | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState("");
   // Adjust plan is an in-place upgrade or downgrade only; cancellation lives in
   // Settings under Help, not on this screen.
@@ -67,6 +70,19 @@ export function AccountDialog({
       await onSignOut();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not sign out.");
+      setBusy(null);
+    }
+  }
+
+  async function deleteAccount() {
+    setBusy("delete");
+    setError("");
+    try {
+      // On success the app navigates to the sign-in screen and unmounts this
+      // dialog, so there is no need to reset busy here.
+      await onDeleteAccount();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not delete the account.");
       setBusy(null);
     }
   }
@@ -144,14 +160,33 @@ export function AccountDialog({
             <button type="button" className="secondary full" onClick={() => setAdjusting(false)} disabled={busy !== null}>Done</button>
           </div>
         ) : (
-          <div className="account-buttons">
-            <button className="secondary full" onClick={() => setAdjusting(true)} disabled={busy !== null}>
-              Adjust plan
-            </button>
-            <button className="primary full" onClick={signOut} disabled={busy !== null}>
-              {busy === "signout" ? "Signing out..." : "Sign out"}
-            </button>
-          </div>
+          <>
+            <div className="account-buttons">
+              <button className="secondary full" onClick={() => setAdjusting(true)} disabled={busy !== null}>
+                Adjust plan
+              </button>
+              <button className="primary full" onClick={signOut} disabled={busy !== null}>
+                {busy === "signout" ? "Signing out..." : "Sign out"}
+              </button>
+            </div>
+            {confirmingDelete ? (
+              <div className="account-delete-confirm" role="alertdialog" aria-label="Confirm account deletion">
+                <p>This permanently deletes your account and all of your data, and cancels your subscription. This cannot be undone.</p>
+                <div className="account-delete-actions">
+                  <button type="button" className="secondary" onClick={() => setConfirmingDelete(false)} disabled={busy !== null}>
+                    Keep my account
+                  </button>
+                  <button type="button" className="danger" onClick={deleteAccount} disabled={busy !== null}>
+                    {busy === "delete" ? "Deleting..." : "Yes, delete my account"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button type="button" className="account-delete-link" onClick={() => setConfirmingDelete(true)} disabled={busy !== null}>
+                Delete my account
+              </button>
+            )}
+          </>
         )}
       </section>
     </div>
