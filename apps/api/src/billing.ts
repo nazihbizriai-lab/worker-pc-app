@@ -148,6 +148,32 @@ export function isPlanUpgrade(fromPlan: PlanId, fromInterval: BillingInterval, t
   return planPriceUsd(toPlan, toInterval) > planPriceUsd(fromPlan, fromInterval);
 }
 
+// Build the two phases for a scheduled downgrade: keep the current (already paid
+// for) price until the end of the current period, then start the new lower price
+// at renewal. Pure, so the phase shape is unit tested without calling Stripe.
+export function downgradeSchedulePhases(
+  currentPriceId: string,
+  newPriceId: string,
+  period: { start: number; end: number },
+  meta: { userId: string; plan: PlanId; interval: BillingInterval }
+): Stripe.SubscriptionScheduleUpdateParams.Phase[] {
+  return [
+    {
+      items: [{ price: currentPriceId, quantity: 1 }],
+      start_date: period.start,
+      end_date: period.end
+    },
+    {
+      items: [{ price: newPriceId, quantity: 1 }],
+      metadata: {
+        workcrew_user_id: meta.userId,
+        workcrew_plan: meta.plan,
+        workcrew_interval: meta.interval
+      }
+    }
+  ];
+}
+
 // Switch an existing active subscription to a different plan or interval (for
 // example Pro to Ultra), instead of opening a second checkout and creating a
 // duplicate subscription.
@@ -191,6 +217,12 @@ export async function changePlan(
     // free. First, best-effort, make that page charge the difference now rather than
     // on the next invoice; if it cannot be set the page still opens.
     await ensureImmediateUpgradeProration(client).catch(() => {});
+    // If a downgrade was scheduled to take effect at period end, cancel it so the
+    // upgrade applies cleanly (otherwise the schedule would fight the portal change).
+    const pendingScheduleId = stringId(stripeSub.schedule);
+    if (pendingScheduleId) {
+      await client.subscriptionSchedules.release(pendingScheduleId).catch(() => {});
+    }
     let session: Stripe.BillingPortal.Session;
     try {
       session = await client.billingPortal.sessions.create({
@@ -217,19 +249,47 @@ export async function changePlan(
     return { url: session.url };
   }
 
-  // Downgrade (or same price): apply in place as a proration credit. No payment
-  // page is needed because the user is not being charged more.
-  const updated = await client.subscriptions.update(subscription.stripeSubscriptionId, {
-    items: [{ id: itemId, price: priceId(plan, interval) }],
-    proration_behavior: "create_prorations",
-    payment_behavior: "allow_incomplete",
-    metadata: {
-      workcrew_user_id: userId,
-      workcrew_plan: plan,
-      workcrew_interval: interval
-    }
+  // Downgrade: the user already paid for the current period at the higher tier, so
+  // keep their higher allowance until that period ends, then switch to the lower
+  // plan at renewal. The limit must never drop mid-period. We do this with a Stripe
+  // subscription schedule: phase 1 keeps the current price until period end, phase 2
+  // starts the new (lower) price after. The live price is unchanged now, so the
+  // entitlement (derived from it) stays high until Stripe advances the schedule at
+  // period end and fires customer.subscription.updated, which lowers it then.
+  if (subscription.plan === plan && subscription.interval === interval) {
+    // No actual change requested.
+    return { changed: true };
+  }
+
+  const currentPriceId = stripeSub.items.data[0]?.price.id;
+  if (!currentPriceId) throw new Error("Subscription has no current price to schedule a downgrade from");
+
+  // Reuse an existing schedule (e.g. the user changed a pending downgrade) or create
+  // one mirroring the live subscription. Either way phase 0 is the current period.
+  const existingScheduleId = stringId(stripeSub.schedule);
+  const schedule = existingScheduleId
+    ? await client.subscriptionSchedules.retrieve(existingScheduleId)
+    : await client.subscriptionSchedules.create({ from_subscription: subscription.stripeSubscriptionId });
+  const currentPhase = schedule.phases[0];
+  if (!currentPhase) throw new Error("Subscription schedule is missing its current phase");
+
+  await client.subscriptionSchedules.update(schedule.id, {
+    // After the new (lower) phase begins, release the schedule back to a normal
+    // subscription so future renewals just continue on the new plan.
+    end_behavior: "release",
+    metadata: { workcrew_user_id: userId },
+    phases: downgradeSchedulePhases(
+      currentPriceId,
+      priceId(plan, interval),
+      { start: currentPhase.start_date, end: currentPhase.end_date },
+      { userId, plan, interval }
+    )
   });
-  await synchronizeSubscription(updated);
+
+  // Do NOT lower the entitlement now. Re-sync from the live (still higher) price so
+  // our record stays on the paid plan; the webhook lowers it when the schedule
+  // advances at period end.
+  await synchronizeSubscription(await client.subscriptions.retrieve(subscription.stripeSubscriptionId));
   return { changed: true };
 }
 
