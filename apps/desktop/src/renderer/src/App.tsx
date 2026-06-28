@@ -10,6 +10,7 @@ import {
   type SubscriptionState
 } from "@workcrew/contracts";
 import { formatTokens } from "./lib/storage";
+import { identifyUser, track } from "./lib/analytics";
 import { DEFAULT_CHAT_MODEL, turnsFromMessages } from "./lib/chat";
 import { useChatStream } from "./hooks/useChatStream";
 import { ChatView } from "./components/ChatView";
@@ -230,6 +231,8 @@ function AuthScreen({ onReady }: { onReady: () => Promise<void> }) {
     event.preventDefault();
     setBusy(true);
     setNotice("");
+    // The kind of auth attempt only; never the email or password.
+    if (mode !== "reset") track("login_started", { mode });
     try {
       if (mode === "reset") {
         await window.workcrew.auth.reset(email);
@@ -239,9 +242,10 @@ function AuthScreen({ onReady }: { onReady: () => Promise<void> }) {
         // Show the inbox confirmation. The email and password stay in state so
         // that after verifying, "Back to sign in" lets the user sign in at once.
         if (result.needsVerification) setSent("verify");
-        else await onReady();
+        else { identifyUser(); await onReady(); }
       } else {
         await window.workcrew.auth.signIn(email, password);
+        identifyUser();
         await onReady();
       }
     } catch (error) {
@@ -890,6 +894,8 @@ export default function App() {
         setPhase("auth");
         return;
       }
+      // Returning user with a stored session: re-link analytics to their id.
+      identifyUser();
       try {
         const state = await window.workcrew.api.entitlement();
         setEntitlement(state);
@@ -915,6 +921,20 @@ export default function App() {
   }
 
   useEffect(() => { void refresh(); }, []);
+
+  // Fire app_opened once, and record uncaught renderer errors as a coarse, safe
+  // category (never the message, which could contain user input or paths).
+  useEffect(() => {
+    track("app_opened");
+    const onError = (event: ErrorEvent): void => track("app_error", { source: "desktop", category: event.error?.name ?? "error" });
+    const onRejection = (): void => track("app_error", { source: "desktop", category: "unhandledrejection" });
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, []);
 
   // Re-fetch only the entitlement (not the whole phase flow). Used after a chat
   // turn or automation run finishes, and when the window regains focus, so the

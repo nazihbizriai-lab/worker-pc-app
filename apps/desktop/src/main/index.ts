@@ -19,7 +19,9 @@ import { z } from "zod";
 import { ApiClient } from "./api-client.js";
 import { AuthVault } from "./auth-vault.js";
 import { BrowserCli } from "./browser-cli.js";
-import { getBackendUrl, setBackendUrl } from "./settings.js";
+import { getAnalyticsOptOut, getBackendUrl, setAnalyticsOptOut, setBackendUrl } from "./settings.js";
+import { capture as analyticsCapture, deviceId as analyticsDeviceId, identify as analyticsIdentify } from "./analytics.js";
+import { ANALYTICS_EVENTS } from "../shared/analytics-events.js";
 import { transcribeSamples } from "./transcription.js";
 import { checkForUpdates, installUpdate, startupUpdateCheck } from "./updater.js";
 import { closeAutomationOverlay, setAutomationOverlay } from "./overlay.js";
@@ -51,6 +53,14 @@ console.info("[WorkCrew] main process loaded");
 // it leaves the desktop.
 const chatSendIpcSchema = chatSendSchema.extend({
   requestId: z.string().min(1).max(200)
+}).strict();
+
+// A renderer analytics call: the event must be one of the known safe events, and
+// properties are a small bag of low-cardinality scalars. Bounded and strict so a
+// compromised renderer cannot send arbitrary events or large payloads.
+const analyticsCaptureSchema = z.object({
+  event: z.enum(ANALYTICS_EVENTS),
+  props: z.record(z.string().max(64), z.union([z.string().max(200), z.number(), z.boolean(), z.null()])).optional()
 }).strict();
 
 // Deliver a single frame for a request id to the renderer. The webContents may
@@ -307,6 +317,24 @@ function registerIpc(): void {
   // set validates and persists a new one (taking effect on the next request).
   ipcMain.handle("settings:get-backend-url", () => getBackendUrl());
   ipcMain.handle("settings:set-backend-url", (_event, raw) => setBackendUrl(z.string().min(1).max(2_048).parse(raw)));
+  ipcMain.handle("settings:get-analytics-opt-out", () => getAnalyticsOptOut());
+  ipcMain.handle("settings:set-analytics-opt-out", (_event, raw) => setAnalyticsOptOut(z.boolean().parse(raw)));
+
+  // Product analytics. The renderer asks the main process to capture a safe,
+  // allow-listed event; main attaches the distinct id (the internal user id after
+  // login, otherwise the anonymous device id) and sends it. identify links the
+  // two after a successful login. Both are no-ops when analytics is off.
+  ipcMain.handle("analytics:capture", (_event, raw) => {
+    const { event, props } = analyticsCaptureSchema.parse(raw);
+    const distinctId = auth.getUserId() ?? analyticsDeviceId();
+    analyticsCapture(distinctId, event, props ?? {});
+    return { ok: true };
+  });
+  ipcMain.handle("analytics:identify", () => {
+    const userId = auth.getUserId();
+    if (userId) analyticsIdentify(userId);
+    return { ok: true };
+  });
 
   // Auto-update: check on demand and install a downloaded update. Both are safe
   // no-ops in an unpackaged (development) build.

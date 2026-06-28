@@ -37,8 +37,19 @@ export function SettingsPanel({ info, onClose }: { info: AppInfo; onClose: () =>
   const [checking, setChecking] = useState(false);
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingError, setBillingError] = useState("");
+  const [optOut, setOptOut] = useState(false);
 
   useEffect(() => window.workcrew.updates.onStatus((status) => setUpdate(status)), []);
+  useEffect(() => { void window.workcrew.settings.getAnalyticsOptOut().then(setOptOut).catch(() => {}); }, []);
+
+  async function toggleAnalytics(share: boolean) {
+    setOptOut(!share);
+    try {
+      await window.workcrew.settings.setAnalyticsOptOut(!share);
+    } catch {
+      // Leave the toggle as set; the choice is retried next time it changes.
+    }
+  }
 
   async function checkForUpdates() {
     setChecking(true);
@@ -86,6 +97,23 @@ export function SettingsPanel({ info, onClose }: { info: AppInfo; onClose: () =>
           )}
         </div>
         {update && <p className="notice">{describeUpdate(update)}</p>}
+      </div>
+
+      <div className="save-form update-section">
+        <label className="field-label">Privacy</label>
+        <p className="field-hint">WorkCrew records anonymous usage events (for example app opened, or a download clicked) to improve the app. It never records your messages, files, screenshots, passwords, or any private data. You can turn this off.</p>
+        <label className="always-toggle">
+          <span className={`switch ${!optOut ? "switch-on" : ""}`} aria-hidden="true">
+            <input
+              type="checkbox"
+              checked={!optOut}
+              onChange={(event) => void toggleAnalytics(event.target.checked)}
+              aria-label="Share anonymous usage analytics"
+            />
+            <span className="switch-knob" />
+          </span>
+          <span className="always-toggle-label">Share anonymous usage analytics</span>
+        </label>
       </div>
 
       <div className="save-form update-section">

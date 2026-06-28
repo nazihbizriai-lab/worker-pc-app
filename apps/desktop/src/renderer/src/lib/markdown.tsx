@@ -1,5 +1,6 @@
-import { createElement, useState, type ReactNode } from "react";
+import { createElement, useEffect, useState, type ReactNode } from "react";
 import { isExportExtension, type ExportExtension } from "../../../shared/export-formats";
+import { track } from "./analytics";
 
 // A small, safe Markdown renderer for assistant messages. It renders to React
 // elements (never raw HTML), so there is no injection risk. It covers what the
@@ -21,8 +22,12 @@ function readableSize(text: string): string {
 function FileBlock({ name, ext, content }: { name: string; ext: ExportExtension; content: string }): ReactNode {
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
+  // The card appeared (a downloadable file was offered). File type only.
+  useEffect(() => { track("file_download_card_shown", { ext }); }, [ext]);
+
   async function onSave(): Promise<void> {
     if (state === "saving") return;
+    track("file_download_clicked", { ext });
     setState("saving");
     try {
       const result = await window.workcrew.files.save({ name, ext, content });
