@@ -55,12 +55,26 @@ const chatSendIpcSchema = chatSendSchema.extend({
   requestId: z.string().min(1).max(200)
 }).strict();
 
-// A renderer analytics call: the event must be one of the known safe events, and
-// properties are a small bag of low-cardinality scalars. Bounded and strict so a
-// compromised renderer cannot send arbitrary events or large payloads.
+// The only property keys the renderer may attach to an event. Allow-listing the
+// KEYS (not just the value types) means a compromised renderer cannot smuggle
+// prompt text, filenames, or local paths under some arbitrary key, even though
+// the event name is already allow-listed.
+const ANALYTICS_PROP_KEYS = new Set(["mode", "via", "category", "ext", "cadence", "source"]);
+
+// A renderer analytics call: the event must be a known safe event, and properties
+// are a small, capped bag of allow-listed keys mapping to low-cardinality
+// scalars. Strict so nothing unexpected reaches the capture call.
 const analyticsCaptureSchema = z.object({
   event: z.enum(ANALYTICS_EVENTS),
-  props: z.record(z.string().max(64), z.union([z.string().max(200), z.number(), z.boolean(), z.null()])).optional()
+  props: z.record(z.string().max(64), z.union([z.string().max(120), z.number(), z.boolean(), z.null()]))
+    .refine(
+      (obj) => {
+        const keys = Object.keys(obj);
+        return keys.length <= 8 && keys.every((key) => ANALYTICS_PROP_KEYS.has(key));
+      },
+      { message: "unexpected analytics property" }
+    )
+    .optional()
 }).strict();
 
 // Deliver a single frame for a request id to the renderer. The webContents may

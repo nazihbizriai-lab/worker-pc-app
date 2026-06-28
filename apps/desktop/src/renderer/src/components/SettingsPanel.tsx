@@ -38,16 +38,22 @@ export function SettingsPanel({ info, onClose }: { info: AppInfo; onClose: () =>
   const [billingBusy, setBillingBusy] = useState(false);
   const [billingError, setBillingError] = useState("");
   const [optOut, setOptOut] = useState(false);
+  const [analyticsNotice, setAnalyticsNotice] = useState("");
 
   useEffect(() => window.workcrew.updates.onStatus((status) => setUpdate(status)), []);
   useEffect(() => { void window.workcrew.settings.getAnalyticsOptOut().then(setOptOut).catch(() => {}); }, []);
 
   async function toggleAnalytics(share: boolean) {
+    const previous = optOut;
     setOptOut(!share);
+    setAnalyticsNotice("");
     try {
       await window.workcrew.settings.setAnalyticsOptOut(!share);
     } catch {
-      // Leave the toggle as set; the choice is retried next time it changes.
+      // Persistence failed: roll the switch back so it never shows a state the
+      // main process did not actually save, and tell the user.
+      setOptOut(previous);
+      setAnalyticsNotice("Could not save that setting. Please try again.");
     }
   }
 
@@ -103,17 +109,18 @@ export function SettingsPanel({ info, onClose }: { info: AppInfo; onClose: () =>
         <label className="field-label">Privacy</label>
         <p className="field-hint">WorkCrew records anonymous usage events (for example app opened, or a download clicked) to improve the app. It never records your messages, files, screenshots, passwords, or any private data. You can turn this off.</p>
         <label className="always-toggle">
-          <span className={`switch ${!optOut ? "switch-on" : ""}`} aria-hidden="true">
+          <span className={`switch ${!optOut ? "switch-on" : ""}`}>
             <input
               type="checkbox"
               checked={!optOut}
               onChange={(event) => void toggleAnalytics(event.target.checked)}
               aria-label="Share anonymous usage analytics"
             />
-            <span className="switch-knob" />
+            <span className="switch-knob" aria-hidden="true" />
           </span>
           <span className="always-toggle-label">Share anonymous usage analytics</span>
         </label>
+        {analyticsNotice && <p className="notice">{analyticsNotice}</p>}
       </div>
 
       <div className="save-form update-section">

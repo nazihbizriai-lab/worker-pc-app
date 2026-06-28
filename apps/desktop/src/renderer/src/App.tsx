@@ -242,10 +242,9 @@ function AuthScreen({ onReady }: { onReady: () => Promise<void> }) {
         // Show the inbox confirmation. The email and password stay in state so
         // that after verifying, "Back to sign in" lets the user sign in at once.
         if (result.needsVerification) setSent("verify");
-        else { identifyUser(); await onReady(); }
+        else await onReady();
       } else {
         await window.workcrew.auth.signIn(email, password);
-        identifyUser();
         await onReady();
       }
     } catch (error) {
@@ -894,11 +893,13 @@ export default function App() {
         setPhase("auth");
         return;
       }
-      // Returning user with a stored session: re-link analytics to their id.
-      identifyUser();
       try {
         const state = await window.workcrew.api.entitlement();
         setEntitlement(state);
+        // The session is now proven valid (entitlement loaded). Identify once
+        // here, the single post-validation point, so a stale stored session is
+        // never identified and a fresh login does not double-fire identify.
+        identifyUser();
         setPhase(state.active ? "workspace" : "paywall");
       } catch (entitlementError) {
         // A stored session can be invalid for the current backend, for example
