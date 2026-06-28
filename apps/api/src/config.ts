@@ -57,14 +57,23 @@ const envSchema = z.object({
   WORKCREW_TRUSTED_PROXY_HOPS: z.coerce.number().int().min(1).max(10).default(1),
   // Where the landing page "Download for Windows" button points. Set this to the
   // installer link once a release is published.
-  WORKCREW_DOWNLOAD_URL: z.string().url().optional(),
+  // Treat an empty value as unset so a blank Render env var does not fail boot;
+  // a non-empty value must still be a real URL.
+  WORKCREW_DOWNLOAD_URL: z.preprocess(
+    (value) => (typeof value === "string" && value.length > 0 ? value : undefined),
+    z.string().url().optional()
+  ),
   // Product analytics (PostHog cloud), backend side. POSTHOG_KEY is the public
   // project key (safe to expose); there is no analytics secret. Analytics is a
   // no-op unless a key is set, and WORKCREW_ANALYTICS_DISABLED=true turns it off
   // entirely regardless. Only safe event names and low-cardinality properties are
   // ever sent; never prompt text, file contents, tokens, or email.
   POSTHOG_KEY: z.string().optional(),
-  POSTHOG_HOST: z.string().url().default("https://us.i.posthog.com"),
+  // Empty/unset falls back to the default; a non-empty value must be a real URL.
+  POSTHOG_HOST: z.preprocess(
+    (value) => (typeof value === "string" && value.length > 0 ? value : undefined),
+    z.string().url().default("https://us.i.posthog.com")
+  ),
   WORKCREW_ANALYTICS_DISABLED: booleanText
 });
 
