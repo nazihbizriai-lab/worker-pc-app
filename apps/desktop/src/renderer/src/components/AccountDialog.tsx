@@ -12,6 +12,8 @@ function formatDate(value: string | null): string {
 export function AccountDialog({
   entitlement,
   usedMicrodollars,
+  userName,
+  onSaveName,
   onClose,
   onSignOut,
   onAdjustPlan,
@@ -19,6 +21,8 @@ export function AccountDialog({
 }: {
   entitlement: SubscriptionState;
   usedMicrodollars: number;
+  userName: string | null;
+  onSaveName: (name: string) => Promise<void>;
   onClose: () => void;
   onSignOut: () => Promise<void>;
   onAdjustPlan: (plan: PlanId, interval: BillingInterval) => Promise<void>;
@@ -28,6 +32,9 @@ export function AccountDialog({
   const [busy, setBusy] = useState<"adjust" | "signout" | "delete" | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState("");
+  const [nameDraft, setNameDraft] = useState(userName ?? "");
+  const [savingName, setSavingName] = useState(false);
+  const [nameSaved, setNameSaved] = useState(false);
   // Adjust plan is an in-place upgrade or downgrade only; cancellation lives in
   // Settings under Help, not on this screen.
   const [adjusting, setAdjusting] = useState(false);
@@ -47,6 +54,20 @@ export function AccountDialog({
   const used = Math.min(usedMicrodollars, budget);
   const remaining = Math.max(0, budget - used);
   const percent = budget > 0 ? Math.min(100, (used / budget) * 100) : 0;
+
+  async function saveName() {
+    setSavingName(true);
+    setError("");
+    setNameSaved(false);
+    try {
+      await onSaveName(nameDraft.trim());
+      setNameSaved(true);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not save your name.");
+    } finally {
+      setSavingName(false);
+    }
+  }
 
   async function switchPlan(plan: PlanId) {
     setBusy("adjust");
@@ -97,6 +118,28 @@ export function AccountDialog({
         <div className="account-head">
           <h2 id="account-title">Account</h2>
           <button ref={closeRef} className="panel-close" onClick={onClose} aria-label="Close account">Close</button>
+        </div>
+
+        <div className="account-name">
+          <label className="field-label" htmlFor="account-name-input">Your name</label>
+          <div className="account-name-row">
+            <input
+              id="account-name-input"
+              type="text"
+              value={nameDraft}
+              maxLength={120}
+              placeholder="What should we call you?"
+              onChange={(event) => { setNameDraft(event.target.value); setNameSaved(false); }}
+            />
+            <button
+              type="button"
+              className="secondary"
+              onClick={saveName}
+              disabled={savingName || nameDraft.trim() === (userName ?? "").trim()}
+            >
+              {savingName ? "Saving..." : nameSaved ? "Saved" : "Save"}
+            </button>
+          </div>
         </div>
 
         <div className="account-plan">

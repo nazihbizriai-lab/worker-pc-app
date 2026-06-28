@@ -224,6 +224,7 @@ function AuthScreen({ onReady }: { onReady: () => Promise<void> }) {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [referralCode, setReferralCode] = useState("");
+  const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -238,7 +239,7 @@ function AuthScreen({ onReady }: { onReady: () => Promise<void> }) {
         await window.workcrew.auth.reset(email);
         setSent("reset");
       } else if (mode === "signup") {
-        const result = await window.workcrew.auth.signUp(email, password, referralCode.trim() || undefined) as { needsVerification?: boolean };
+        const result = await window.workcrew.auth.signUp(email, password, name.trim() || undefined, referralCode.trim() || undefined) as { needsVerification?: boolean };
         // Show the inbox confirmation. The email and password stay in state so
         // that after verifying, "Back to sign in" lets the user sign in at once.
         if (result.needsVerification) setSent("verify");
@@ -288,6 +289,9 @@ function AuthScreen({ onReady }: { onReady: () => Promise<void> }) {
         <p className="muted">Your work stays under your control. WorkCrew acts only with the permissions you grant.</p>
         <form onSubmit={submit}>
           <label>Email address<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required /></label>
+          {mode === "signup" && (
+            <label>Your name<input type="text" value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" maxLength={120} placeholder="What should we call you?" /></label>
+          )}
           {mode !== "reset" && (
             <label>Password
               <div className="password-field">
@@ -423,7 +427,7 @@ function FiveHourRing({ entitlement }: { entitlement: SubscriptionState }) {
   );
 }
 
-function Workspace({ info, entitlement, onRefreshEntitlement, onSignOut, onUpgrade, onAdjustPlan, onDeleteAccount }: { info: AppInfo; entitlement: SubscriptionState; onRefreshEntitlement: () => void; onSignOut: () => Promise<void>; onUpgrade: () => Promise<void>; onAdjustPlan: (plan: PlanId, interval: BillingInterval) => Promise<void>; onDeleteAccount: () => Promise<void> }) {
+function Workspace({ info, entitlement, userName, onSetName, onRefreshEntitlement, onSignOut, onUpgrade, onAdjustPlan, onDeleteAccount }: { info: AppInfo; entitlement: SubscriptionState; userName: string | null; onSetName: (name: string) => Promise<void>; onRefreshEntitlement: () => void; onSignOut: () => Promise<void>; onUpgrade: () => Promise<void>; onAdjustPlan: (plan: PlanId, interval: BillingInterval) => Promise<void>; onDeleteAccount: () => Promise<void> }) {
   const [model, setModel] = useState<ModelTier>(DEFAULT_CHAT_MODEL);
   const [upgrading, setUpgrading] = useState(false);
   const [upgradeError, setUpgradeError] = useState("");
@@ -790,8 +794,8 @@ function Workspace({ info, entitlement, onRefreshEntitlement, onSignOut, onUpgra
           </button>
         )}
         <button className="account-button" onClick={() => setAccountOpen(true)} aria-label="Open account">
-          <span className="avatar">A</span>
-          <span><strong>Account</strong><small>{planLabel}</small></span>
+          <span className="avatar">{(userName?.trim()?.[0] ?? "A").toUpperCase()}</span>
+          <span><strong>{userName?.trim() || "Account"}</strong><small>{planLabel}</small></span>
           <span className="signout">View</span>
         </button>
       </aside>
@@ -862,6 +866,8 @@ function Workspace({ info, entitlement, onRefreshEntitlement, onSignOut, onUpgra
         <AccountDialog
           entitlement={entitlement}
           usedMicrodollars={usage}
+          userName={userName}
+          onSaveName={onSetName}
           onClose={() => setAccountOpen(false)}
           onSignOut={onSignOut}
           onAdjustPlan={onAdjustPlan}
@@ -884,6 +890,7 @@ export default function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [entitlement, setEntitlement] = useState<SubscriptionState>(EMPTY_ENTITLEMENT);
   const [fatal, setFatal] = useState("");
+  const [userName, setUserName] = useState<string | null>(null);
 
   async function refresh() {
     try {
@@ -893,6 +900,7 @@ export default function App() {
         setPhase("auth");
         return;
       }
+      setUserName(session.name ?? null);
       try {
         const state = await window.workcrew.api.entitlement();
         setEntitlement(state);
@@ -919,6 +927,12 @@ export default function App() {
       setFatal(errorMessage(error));
       setPhase("loading");
     }
+  }
+
+  // Update the display name via the backend, then reflect it locally at once.
+  async function setUserDisplayName(newName: string): Promise<void> {
+    const result = await window.workcrew.auth.setName(newName);
+    setUserName(result.name ?? null);
   }
 
   useEffect(() => { void refresh(); }, []);
@@ -966,6 +980,8 @@ export default function App() {
     <Workspace
       info={info}
       entitlement={entitlement}
+      userName={userName}
+      onSetName={setUserDisplayName}
       onRefreshEntitlement={refreshEntitlement}
       onSignOut={async () => { await window.workcrew.auth.signOut(); setPhase("auth"); }}
       onDeleteAccount={async () => { await window.workcrew.auth.deleteAccount(); setPhase("auth"); }}

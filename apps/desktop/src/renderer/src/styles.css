@@ -596,6 +596,10 @@ select option:checked { background-color: var(--panel-2); }
 .account-modal { width: min(420px, 100%); }
 .account-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
 .account-head h2 { margin: 0; }
+.account-name { margin-bottom: 14px; }
+.account-name-row { display: flex; gap: 8px; margin-top: 6px; }
+.account-name-row input { flex: 1 1 auto; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); color: var(--text); font-size: var(--fs-ui); }
+.account-name-row button { flex: none; }
 .account-plan { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; border: 1px solid #232930; border-radius: 12px; background: #0d1014; }
 .account-plan strong { display: block; margin-top: 5px; font-size: 18px; }
 .account-usage { margin-top: 14px; padding: 16px; border: 1px solid #232930; border-radius: 12px; background: #0d1014; }
