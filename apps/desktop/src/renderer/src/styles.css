@@ -608,6 +608,10 @@ select option:checked { background-color: var(--panel-2); }
 .account-usage-foot { display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; color: #79828f; font-size: 11px; }
 .account-buttons { display: grid; gap: 10px; margin-top: 20px; }
 .account-usage-extra { margin: 12px 0 0; color: var(--accent-soft); font-size: 11px; line-height: 1.45; }
+.account-pending { margin-top: 14px; padding: 14px 16px; border: 1px solid #3a3358; border-radius: 12px; background: #16131f; }
+.account-pending strong { display: block; color: #d9d2ff; font-size: 13px; margin-bottom: 6px; }
+.account-pending p { margin: 0 0 12px; color: #b6b0c6; font-size: 12px; line-height: 1.5; }
+.account-pending .secondary { padding: 8px 14px; font-size: 12px; }
 .account-tokens-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .account-tokens-row .secondary { padding: 8px 14px; font-size: 12px; }
 .account-autoreload { color: #4caf7d; font-size: 11px; font-weight: 600; }

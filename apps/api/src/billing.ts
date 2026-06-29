@@ -8,10 +8,12 @@ import {
 import { config } from "./config.js";
 import { creditReferralOnPayment } from "./budget.js";
 import {
+  clearPendingDowngrade,
   getSubscription,
   getSubscriptionByStripeId,
   hasStripeEvent,
   recordStripeEvent,
+  setPendingDowngrade,
   upsertSubscription
 } from "./db.js";
 
@@ -217,12 +219,18 @@ export async function changePlan(
     // free. First, best-effort, make that page charge the difference now rather than
     // on the next invoice; if it cannot be set the page still opens.
     await ensureImmediateUpgradeProration(client).catch(() => {});
-    // If a downgrade was scheduled to take effect at period end, cancel it so the
-    // upgrade applies cleanly (otherwise the schedule would fight the portal change).
+    // Starting an upgrade cancels any pending downgrade. The Stripe schedule must be
+    // released before the portal can edit the subscription item (otherwise the
+    // schedule fights the portal change), and the schedule cannot be partially
+    // released, so this is intentional: choosing to upgrade discards a previously
+    // scheduled downgrade. If the user then abandons the hosted page without paying,
+    // they simply stay on their current plan with no pending change (they keep the
+    // tier they are already paying for), which is the safe outcome.
     const pendingScheduleId = stringId(stripeSub.schedule);
     if (pendingScheduleId) {
       await client.subscriptionSchedules.release(pendingScheduleId).catch(() => {});
     }
+    await clearPendingDowngrade(userId);
     let session: Stripe.BillingPortal.Session;
     try {
       session = await client.billingPortal.sessions.create({
@@ -257,7 +265,11 @@ export async function changePlan(
   // entitlement (derived from it) stays high until Stripe advances the schedule at
   // period end and fires customer.subscription.updated, which lowers it then.
   if (subscription.plan === plan && subscription.interval === interval) {
-    // No actual change requested.
+    // Re-selecting the current plan cancels any scheduled downgrade: release the
+    // schedule so renewals continue on the current plan, and clear the marker.
+    const existingScheduleId = stringId(stripeSub.schedule);
+    if (existingScheduleId) await client.subscriptionSchedules.release(existingScheduleId).catch(() => {});
+    await clearPendingDowngrade(userId);
     return { changed: true };
   }
 
@@ -290,6 +302,10 @@ export async function changePlan(
   // our record stays on the paid plan; the webhook lowers it when the schedule
   // advances at period end.
   await synchronizeSubscription(await client.subscriptions.retrieve(subscription.stripeSubscriptionId));
+  // Record the scheduled downgrade so the app can tell the user their current limit
+  // holds until period end and then becomes the lower plan. currentPhase.end_date is
+  // in seconds; the lower plan begins exactly then.
+  await setPendingDowngrade(userId, plan, interval, currentPhase.end_date * 1_000);
   return { changed: true };
 }
 
@@ -378,6 +394,16 @@ async function synchronizeSubscription(subscription: Stripe.Subscription): Promi
     currentPeriodEndMs: period.endMs
   };
   await upsertSubscription(row);
+  // If a scheduled downgrade has now taken effect (the live plan AND interval equal
+  // what was pending), clear the marker so the app stops advertising a future
+  // change. Both must match: an interval-only downgrade (e.g. Ultra yearly to Ultra
+  // monthly) keeps the same plan, so comparing the plan alone would wipe the marker
+  // early on any unrelated webhook while the higher interval is still live. The
+  // upsert above leaves the pending columns untouched, so this is the one place a
+  // landed downgrade is reconciled.
+  if (existing?.pendingPlan && plan === existing.pendingPlan && interval === existing.pendingInterval) {
+    await clearPendingDowngrade(userId);
+  }
   // The first time a referred user becomes a paying subscriber, credit the
   // inviter. Guarded in the database, so repeated subscription webhook events
   // (created, updated, renewals) never double-credit.

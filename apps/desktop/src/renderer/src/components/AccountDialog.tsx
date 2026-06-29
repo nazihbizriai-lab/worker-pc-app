@@ -82,6 +82,21 @@ export function AccountDialog({
     }
   }
 
+  // Cancel a scheduled downgrade by re-selecting the current plan and interval,
+  // which releases the Stripe schedule so renewals continue on the current plan.
+  async function cancelDowngrade() {
+    if (!entitlement.plan || !entitlement.interval) return;
+    setBusy("adjust");
+    setError("");
+    try {
+      await onAdjustPlan(entitlement.plan, entitlement.interval);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not cancel the scheduled change.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function signOut() {
     setBusy("signout");
     setError("");
@@ -162,6 +177,20 @@ export function AccountDialog({
           </div>
         </div>
 
+        {entitlement.pendingPlan && entitlement.plan && entitlement.pendingEffective && (
+          <div className="account-pending" role="status">
+            <strong>Scheduled plan change</strong>
+            <p>
+              You will switch to {PLAN_CATALOG[entitlement.pendingPlan].name} on {formatDate(entitlement.pendingEffective)}.
+              You keep your current {PLAN_CATALOG[entitlement.plan].name} limit of {formatTokens(budget)} tokens until then,
+              after which it becomes the {PLAN_CATALOG[entitlement.pendingPlan].name} limit. Nothing changes before that date.
+            </p>
+            <button type="button" className="secondary" onClick={cancelDowngrade} disabled={busy !== null}>
+              {busy === "adjust" ? "Updating..." : `Keep ${PLAN_CATALOG[entitlement.plan].name}`}
+            </button>
+          </div>
+        )}
+
         {error && <p className="error-banner inline">{error}</p>}
 
         {adjusting ? (
@@ -174,6 +203,7 @@ export function AccountDialog({
               const catalog = PLAN_CATALOG[plan];
               const price = interval === "year" ? catalog.yearlyPriceUsd : catalog.monthlyPriceUsd;
               const isCurrent = entitlement.plan === plan && entitlement.interval === interval;
+              const isPending = entitlement.pendingPlan === plan && entitlement.pendingInterval === interval;
               return (
                 <div key={plan} className="plan-option">
                   <div className="plan-option-info">
@@ -182,11 +212,11 @@ export function AccountDialog({
                   </div>
                   <button
                     type="button"
-                    className={isCurrent ? "secondary" : "primary"}
+                    className={isCurrent || isPending ? "secondary" : "primary"}
                     onClick={() => switchPlan(plan)}
-                    disabled={isCurrent || busy !== null}
+                    disabled={isCurrent || isPending || busy !== null}
                   >
-                    {isCurrent ? "Current" : busy === "adjust" ? "Switching..." : "Switch"}
+                    {isCurrent ? "Current" : isPending ? "Scheduled" : busy === "adjust" ? "Switching..." : "Switch"}
                   </button>
                 </div>
               );

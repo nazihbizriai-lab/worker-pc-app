@@ -163,7 +163,10 @@ async function subscriptionState(userId: string): Promise<SubscriptionState> {
       fiveHourLimitMicrodollars: 0,
       fiveHourUsedMicrodollars: 0,
       dailyLimitMicrodollars: 0,
-      dailyUsedMicrodollars: 0
+      dailyUsedMicrodollars: 0,
+      pendingPlan: null,
+      pendingInterval: null,
+      pendingEffective: null
     };
   }
   const nowMs = Date.now();
@@ -188,7 +191,10 @@ async function subscriptionState(userId: string): Promise<SubscriptionState> {
     fiveHourLimitMicrodollars: limits.fiveHour,
     fiveHourUsedMicrodollars: fiveHourUsed,
     dailyLimitMicrodollars: limits.daily,
-    dailyUsedMicrodollars: dailyUsed
+    dailyUsedMicrodollars: dailyUsed,
+    pendingPlan: subscription.pendingPlan,
+    pendingInterval: subscription.pendingInterval,
+    pendingEffective: subscription.pendingEffectiveMs ? new Date(subscription.pendingEffectiveMs).toISOString() : null
   };
 }
 

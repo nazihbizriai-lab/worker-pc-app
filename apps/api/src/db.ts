@@ -30,6 +30,13 @@ export type SubscriptionRow = {
   autoReloadPack: string;
   monthlyTopupLimitMicro: number;
   stripePaymentMethodId: string | null;
+  /** A scheduled downgrade that has not taken effect yet: the lower plan/interval
+   * the subscription moves to at the end of the current paid period, and when (ms).
+   * Null when nothing is scheduled. Set by changePlan, cleared on upgrade or once
+   * the schedule advances. Like auto-reload, the webhook upsert never writes these. */
+  pendingPlan: PlanId | null;
+  pendingInterval: BillingInterval | null;
+  pendingEffectiveMs: number | null;
   /** Referral bonus earned by this user (added to their monthly budget). Joined
    * from the users table on read; optional because it is not part of the
    * writable subscription row (upsert ignores it). */
@@ -96,6 +103,9 @@ export async function initializeDatabase(db: DatabaseClient = client): Promise<v
       auto_reload_pack TEXT NOT NULL DEFAULT 'small',
       monthly_topup_limit_micro BIGINT NOT NULL DEFAULT 0,
       stripe_payment_method_id TEXT,
+      pending_plan TEXT,
+      pending_interval TEXT,
+      pending_effective_ms BIGINT,
       updated_at_ms BIGINT NOT NULL
     )`,
     `CREATE TABLE IF NOT EXISTS usage_ledger (
@@ -263,6 +273,10 @@ export async function initializeDatabase(db: DatabaseClient = client): Promise<v
   await addColumnIfMissing(db, "subscriptions", "auto_reload_pack", "TEXT NOT NULL DEFAULT 'small'");
   await addColumnIfMissing(db, "subscriptions", "monthly_topup_limit_micro", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing(db, "subscriptions", "stripe_payment_method_id", "TEXT");
+  // A scheduled (not-yet-effective) downgrade on existing subscription rows.
+  await addColumnIfMissing(db, "subscriptions", "pending_plan", "TEXT");
+  await addColumnIfMissing(db, "subscriptions", "pending_interval", "TEXT");
+  await addColumnIfMissing(db, "subscriptions", "pending_effective_ms", "BIGINT");
   // Per-credit dedupe key on existing ledgers, so Stripe top-up fulfilment and
   // auto-reload can be made idempotent at the credit write itself.
   await addColumnIfMissing(db, "usage_ledger", "dedupe_id", "TEXT");
@@ -324,6 +338,9 @@ function mapSubscription(row: Record<string, unknown>): SubscriptionRow {
     autoReloadPack: row.auto_reload_pack ? String(row.auto_reload_pack) : "small",
     monthlyTopupLimitMicro: asNumber(row.monthly_topup_limit_micro),
     stripePaymentMethodId: row.stripe_payment_method_id ? String(row.stripe_payment_method_id) : null,
+    pendingPlan: row.pending_plan ? (String(row.pending_plan) as PlanId) : null,
+    pendingInterval: row.pending_interval ? (String(row.pending_interval) as BillingInterval) : null,
+    pendingEffectiveMs: row.pending_effective_ms == null ? null : asNumber(row.pending_effective_ms),
     referralBonusMicrodollars: asNumber(row.referral_bonus_microdollars)
   };
 }
@@ -356,7 +373,8 @@ export async function getSubscriptionByStripeId(subscriptionId: string): Promise
 // configuration. Those columns are managed by setAutoReloadConfig/setPaymentMethod.
 type SubscriptionUpsert = Omit<
   SubscriptionRow,
-  "autoReloadEnabled" | "autoReloadPack" | "monthlyTopupLimitMicro" | "stripePaymentMethodId" | "referralBonusMicrodollars"
+  "autoReloadEnabled" | "autoReloadPack" | "monthlyTopupLimitMicro" | "stripePaymentMethodId"
+    | "pendingPlan" | "pendingInterval" | "pendingEffectiveMs" | "referralBonusMicrodollars"
 >;
 
 export async function upsertSubscription(input: SubscriptionUpsert): Promise<void> {
@@ -387,6 +405,34 @@ export async function upsertSubscription(input: SubscriptionUpsert): Promise<voi
       input.currentPeriodEndMs,
       Date.now()
     ]
+  });
+}
+
+// Record a scheduled downgrade that takes effect at the end of the current paid
+// period. The current (higher) plan and limit are untouched; only this marker is
+// set, so the UI can show "switches to <plan> on <date>" while access stays high.
+export async function setPendingDowngrade(
+  userId: string,
+  plan: PlanId,
+  interval: BillingInterval,
+  effectiveMs: number
+): Promise<void> {
+  await client.execute({
+    sql: `UPDATE subscriptions
+      SET pending_plan = ?, pending_interval = ?, pending_effective_ms = ?, updated_at_ms = ?
+      WHERE user_id = ?`,
+    args: [plan, interval, effectiveMs, Date.now(), userId]
+  });
+}
+
+// Clear any scheduled downgrade, used when it is canceled (the user re-selects or
+// upgrades) or once it has taken effect and the live plan already reflects it.
+export async function clearPendingDowngrade(userId: string): Promise<void> {
+  await client.execute({
+    sql: `UPDATE subscriptions
+      SET pending_plan = NULL, pending_interval = NULL, pending_effective_ms = NULL, updated_at_ms = ?
+      WHERE user_id = ?`,
+    args: [Date.now(), userId]
   });
 }
 

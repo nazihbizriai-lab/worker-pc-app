@@ -51,7 +51,10 @@ const EMPTY_ENTITLEMENT: SubscriptionState = {
   fiveHourLimitMicrodollars: 0,
   fiveHourUsedMicrodollars: 0,
   dailyLimitMicrodollars: 0,
-  dailyUsedMicrodollars: 0
+  dailyUsedMicrodollars: 0,
+  pendingPlan: null,
+  pendingInterval: null,
+  pendingEffective: null
 };
 
 // Tell a refreshed entitlement (returned by a downgrade) apart from the
@@ -288,10 +291,10 @@ function AuthScreen({ onReady }: { onReady: () => Promise<void> }) {
         <h1>{mode === "signin" ? "Welcome back" : mode === "signup" ? "Create your crew" : "Reset your password"}</h1>
         <p className="muted">Your work stays under your control. WorkCrew acts only with the permissions you grant.</p>
         <form onSubmit={submit}>
-          <label>Email address<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required /></label>
           {mode === "signup" && (
             <label>Your name<input type="text" value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" maxLength={120} placeholder="What should we call you?" /></label>
           )}
+          <label>Email address<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required /></label>
           {mode !== "reset" && (
             <label>Password
               <div className="password-field">
