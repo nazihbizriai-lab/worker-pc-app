@@ -74,6 +74,19 @@ if (!SECRET.startsWith("sk_test_")) {
 }
 if (!WHSEC) fail("STRIPE_WEBHOOK_SECRET is missing in .env.");
 
+// This driver signs synthetic billing webhooks and POSTs them to WORKCREW_API_URL.
+// Refuse any non-local target so a stray .env pointing at staging/production can
+// never replay billing mutations against a shared backend.
+let backendHost = "";
+try {
+  backendHost = new URL(BACKEND).hostname;
+} catch {
+  fail(`WORKCREW_API_URL is not a valid URL: ${BACKEND}`);
+}
+if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(backendHost)) {
+  fail(`This is a local-only test driver. WORKCREW_API_URL must point at localhost; got ${BACKEND}.`);
+}
+
 const stripe = new Stripe(SECRET);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const nowSec = () => Math.floor(Date.now() / 1000);

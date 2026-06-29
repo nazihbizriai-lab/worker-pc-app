@@ -49,6 +49,13 @@ export function AccountDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // Keep the editable name field in sync with the canonical saved value, so after
+  // a save (which trims) or any backend normalization the input reflects what was
+  // actually stored rather than stale draft text.
+  useEffect(() => {
+    setNameDraft(userName ?? "");
+  }, [userName]);
+
   const planName = entitlement.plan ? PLAN_CATALOG[entitlement.plan].name : "No active plan";
   const budget = entitlement.budgetMicrodollars;
   const used = Math.min(usedMicrodollars, budget);
@@ -56,11 +63,13 @@ export function AccountDialog({
   const percent = budget > 0 ? Math.min(100, (used / budget) * 100) : 0;
 
   async function saveName() {
+    const normalized = nameDraft.trim();
     setSavingName(true);
     setError("");
     setNameSaved(false);
     try {
-      await onSaveName(nameDraft.trim());
+      await onSaveName(normalized);
+      setNameDraft(normalized);
       setNameSaved(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not save your name.");

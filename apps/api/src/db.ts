@@ -103,8 +103,8 @@ export async function initializeDatabase(db: DatabaseClient = client): Promise<v
       auto_reload_pack TEXT NOT NULL DEFAULT 'small',
       monthly_topup_limit_micro BIGINT NOT NULL DEFAULT 0,
       stripe_payment_method_id TEXT,
-      pending_plan TEXT,
-      pending_interval TEXT,
+      pending_plan TEXT CHECK (pending_plan IN ('pro', 'ultra')),
+      pending_interval TEXT CHECK (pending_interval IN ('month', 'year')),
       pending_effective_ms BIGINT,
       updated_at_ms BIGINT NOT NULL
     )`,
@@ -274,8 +274,8 @@ export async function initializeDatabase(db: DatabaseClient = client): Promise<v
   await addColumnIfMissing(db, "subscriptions", "monthly_topup_limit_micro", "BIGINT NOT NULL DEFAULT 0");
   await addColumnIfMissing(db, "subscriptions", "stripe_payment_method_id", "TEXT");
   // A scheduled (not-yet-effective) downgrade on existing subscription rows.
-  await addColumnIfMissing(db, "subscriptions", "pending_plan", "TEXT");
-  await addColumnIfMissing(db, "subscriptions", "pending_interval", "TEXT");
+  await addColumnIfMissing(db, "subscriptions", "pending_plan", "TEXT CHECK (pending_plan IN ('pro', 'ultra'))");
+  await addColumnIfMissing(db, "subscriptions", "pending_interval", "TEXT CHECK (pending_interval IN ('month', 'year'))");
   await addColumnIfMissing(db, "subscriptions", "pending_effective_ms", "BIGINT");
   // Per-credit dedupe key on existing ledgers, so Stripe top-up fulfilment and
   // auto-reload can be made idempotent at the credit write itself.
