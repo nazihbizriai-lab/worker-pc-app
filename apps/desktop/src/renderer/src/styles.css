@@ -578,7 +578,10 @@ select option:checked { background-color: var(--panel-2); }
 
 /* Modals (approval and account) */
 .modal-overlay { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px; background: rgba(6,8,11,.62); backdrop-filter: blur(3px); animation: overlay-in .16s ease; }
-.modal { width: min(440px, 100%); padding: 26px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel-2); box-shadow: 0 30px 90px rgba(0,0,0,.5); animation: modal-in .18s ease; }
+/* Cap the height to the viewport (minus the overlay's 24px padding each side) and
+   scroll inside, so a tall dialog (e.g. Account with the plan list expanded) never
+   pushes its bottom buttons off-screen where they cannot be reached. */
+.modal { width: min(440px, 100%); max-height: calc(100vh - 48px); overflow-y: auto; padding: 26px; border: 1px solid var(--line); border-radius: 18px; background: var(--panel-2); box-shadow: 0 30px 90px rgba(0,0,0,.5); animation: modal-in .18s ease; }
 .modal-badge { display: inline-block; margin-bottom: 14px; padding: 4px 10px; border: 1px solid #463a6e; border-radius: 99px; color: var(--accent-soft); background: #1a1530; font-size: 10px; font-weight: 750; letter-spacing: .5px; }
 .modal h2 { margin: 0 0 8px; font-size: 20px; letter-spacing: -.4px; }
 .modal-text { margin: 0 0 16px; color: var(--muted); font-size: 13px; line-height: 1.55; }

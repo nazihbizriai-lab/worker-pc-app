@@ -48,6 +48,12 @@ let attachmentUploadChain: Promise<unknown> = Promise.resolve();
 
 console.info("[WorkCrew] main process loaded");
 
+// Render at a logical 100% scale regardless of the OS display scaling. Without
+// this, a Windows "125%" setting enlarges the whole app ("zoomed in"); forcing
+// the device scale factor to 1 keeps the app at its intended size by default.
+// Must be set before the app becomes ready.
+app.commandLine.appendSwitch("force-device-scale-factor", "1");
+
 // The shape the renderer sends for a chat turn. requestId is generated in the
 // preload; the rest matches chatSendSchema so the body can be validated before
 // it leaves the desktop.
